@@ -1,0 +1,20 @@
+# Keep secrets, local state, and history out of the image build context.
+.env
+.git
+.gitignore
+.venv
+venv
+data/
+*.db
+*.db-shm
+*.db-wal
+*.log
+.swarm/
+.claude-flow/
+.claude/
+ruvector.db
+__pycache__/
+*.pyc
+.pytest_cache/
+.DS_Store
+tests/

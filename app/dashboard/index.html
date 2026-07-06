@@ -107,6 +107,11 @@ footer{margin-top:14px;color:var(--ink3);font-size:11px;display:flex;gap:14px;fl
 const $ = s => document.querySelector(s);
 let SYM = "ALL", CURVE = [];
 
+// Escape every DB/config-sourced string before it enters innerHTML.
+// reasoning/regime_label become attacker-influenced once llm.enabled=true.
+const esc = v => (v==null ? "" : String(v).replace(/[&<>"']/g,
+  c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c])));
+
 const usd = v => (v==null ? "—" : (v<0?"−$":"$") + Math.abs(v).toLocaleString("en-US",{minimumFractionDigits:2,maximumFractionDigits:2}));
 const num = (v,d=2) => v==null ? "—" : Number(v).toFixed(d);
 const pct = (v,d=1) => v==null ? "—" : (v*100).toFixed(d)+"%";
@@ -115,7 +120,7 @@ function ago(ts){ if(!ts) return "—"; const s=(Date.now()-new Date(ts))/1e3;
   if(s<90) return Math.round(s)+"s"; if(s<5400) return Math.round(s/60)+"m";
   if(s<172800) return (s/3600).toFixed(1)+"h"; return (s/86400).toFixed(1)+"d"; }
 const fsym = r => SYM==="ALL" || (r.symbol||"").startsWith(SYM);
-const shortSym = s => (s||"").split("/")[0];
+const shortSym = s => esc((s||"").split("/")[0]);
 
 function tile(k,v,cls="",s=""){ return `<div class="tile"><div class="k">${k}</div><div class="v ${cls}">${v}</div>${s?`<div class="s">${s}</div>`:""}</div>`; }
 
@@ -139,8 +144,8 @@ function renderSys(m){
   $("#mode").textContent = s.live ? "LIVE ORDERS" : "DRY-RUN · NO REAL ORDERS";
   $("#mode").className = "badge " + (s.live?"live":"dry");
   $("#sysline").innerHTML =
-    `<span>exchange <b>${s.exchange||"—"} ${s.market_type||""}</b></span>`+
-    `<span>markets <b>${(s.symbols||[]).map(shortSym).join(" · ")}</b> @ ${s.timeframe||""}</span>`+
+    `<span>exchange <b>${esc(s.exchange||"—")} ${esc(s.market_type||"")}</b></span>`+
+    `<span>markets <b>${(s.symbols||[]).slice(0,6).map(shortSym).join(" · ")}${(s.symbols||[]).length>6?" +"+((s.symbols||[]).length-6):""}</b> @ ${esc(s.timeframe||"")}</span>`+
     `<span>conf. floor <b>${num(s.min_confidence,2)}</b></span>`+
     (s.live?`<span>notional cap <b>${usd(s.max_notional_usd)}</b></span>`:"");
   $("#foot").textContent = s.live ? "" : "live trading locked: live.enabled=false — every order is simulated & logged only";
@@ -177,7 +182,7 @@ function renderChart(){
     $("#cross").setAttribute("visibility","visible");
     const mk=$("#mark"); mk.setAttribute("cx",cx); mk.setAttribute("cy",cy); mk.setAttribute("visibility","visible");
     tip.style.display="block";
-    tip.innerHTML=`<b>${usd(ys[bi])}</b><br><span style="color:var(--ink3)">${new Date(xs[bi]).toLocaleString()}</span><br><span style="color:var(--ink3)">${c[bi].event||""}</span>`;
+    tip.innerHTML=`<b>${usd(ys[bi])}</b><br><span style="color:var(--ink3)">${esc(new Date(xs[bi]).toLocaleString())}</span><br><span style="color:var(--ink3)">${esc(c[bi].event||"")}</span>`;
     const wr=$("#wrap").getBoundingClientRect();
     tip.style.left=Math.min(e.clientX-wr.left+14, wr.width-170)+"px";
     tip.style.top=(e.clientY-wr.top-14)+"px";
@@ -196,25 +201,25 @@ function renderPositions(rows){
   $("#npos").textContent = rows.length? `· ${rows.length}` : "";
   if(!rows.length){ $("#positions").innerHTML=`<div class="empty">none — engine is waiting for an earned edge</div>`; return; }
   $("#positions").innerHTML = `<table><tr><th>#</th><th>sym</th><th>dir</th><th>entry</th><th>SL</th><th>TP</th><th>size</th><th>conf</th><th>age</th><th>MAE/MFE</th></tr>`+
-    rows.map(t=>`<tr><td>${t.id}</td><td>${shortSym(t.symbol)}</td>
-      <td><span class="dir ${t.direction}">${t.direction}</span></td>
+    rows.map(t=>{const d=t.direction==="short"?"short":"long"; return `<tr><td>${num(t.id,0)}</td><td>${shortSym(t.symbol)}</td>
+      <td><span class="dir ${d}">${d}</span></td>
       <td>${num(t.entry_price)}</td><td class="neg">${num(t.stop_loss)}</td><td class="pos">${num(t.take_profit)}</td>
       <td>${num(t.position_size,6)}</td><td>${num(t.confidence,2)}</td>
-      <td>${ago(t.entry_ts)}</td><td>${num(t.mae_pct,2)}/${num(t.mfe_pct,2)}%</td></tr>`).join("")+`</table>`;
+      <td>${ago(t.entry_ts)}</td><td>${num(t.mae_pct,2)}/${num(t.mfe_pct,2)}%</td></tr>`;}).join("")+`</table>`;
 }
 
 function renderTrades(rows){
   rows = rows.filter(fsym).slice(0,25);
   if(!rows.length){ $("#trades").innerHTML=`<div class="empty">no completed trades yet — every close will appear here with PnL, R and exit reason</div>`; return; }
   $("#trades").innerHTML = `<table><tr><th>#</th><th>sym</th><th>dir</th><th>entry→exit</th><th>PnL</th><th>R</th><th>exit</th><th>held</th><th>closed</th></tr>`+
-    rows.map(t=>`<tr><td>${t.id}</td><td>${shortSym(t.symbol)}</td>
-      <td><span class="dir ${t.direction}">${t.direction}</span></td>
+    rows.map(t=>{const d=t.direction==="short"?"short":"long"; return `<tr><td>${num(t.id,0)}</td><td>${shortSym(t.symbol)}</td>
+      <td><span class="dir ${d}">${d}</span></td>
       <td>${num(t.entry_price)} → ${num(t.exit_price)}</td>
-      <td class="${sign(t.pnl_usd)}">${t.pnl_usd>0?"+":""}${usd(t.pnl_usd).replace("$","$")}</td>
+      <td class="${sign(t.pnl_usd)}">${t.pnl_usd>0?"+":""}${usd(t.pnl_usd)}</td>
       <td class="${sign(t.r_multiple)}">${num(t.r_multiple)}R</td>
-      <td>${t.exit_reason||"—"}</td>
+      <td>${esc(t.exit_reason||"—")}</td>
       <td>${t.duration_minutes!=null? (t.duration_minutes>90? (t.duration_minutes/60).toFixed(1)+"h" : Math.round(t.duration_minutes)+"m") : "—"}</td>
-      <td>${ago(t.exit_ts)} ago</td></tr>`).join("")+`</table>`;
+      <td>${ago(t.exit_ts)} ago</td></tr>`;}).join("")+`</table>`;
 }
 
 function renderAnalyses(rows, minConf){
@@ -223,13 +228,14 @@ function renderAnalyses(rows, minConf){
   $("#analyses").innerHTML = `<table><tr><th>when</th><th>sym</th><th>price</th><th>bias</th><th>confidence</th><th>regime</th><th>changepoint</th><th>signal</th><th>reasoning</th></tr>`+
     rows.map(a=>{
       const cp = a.changepoint_prob||0, alarm = cp>=0.35;
+      const bias = ["bullish","bearish","neutral"].includes(a.bias)?a.bias:"neutral";
       return `<tr><td>${ago(a.ts)}</td><td>${shortSym(a.symbol)}</td><td>${num(a.price)}</td>
-      <td class="bias-${a.bias}">${a.bias}</td>
+      <td class="bias-${bias}">${bias}</td>
       <td><div style="display:flex;gap:8px;align-items:center">${meter(a.confidence,minConf)}<span>${num(a.confidence,2)}</span></div></td>
-      <td>${a.regime_label||"—"}</td>
+      <td>${esc(a.regime_label||"—")}</td>
       <td><div style="display:flex;gap:8px;align-items:center">${meter(cp,0.35,alarm)}<span class="${alarm?"wrn":""}">${num(cp,2)}</span></div></td>
       <td>${a.trade_recommended?`<span class="pos">◉ TRADE</span>`:`<span style="color:var(--ink3)">standby</span>`}</td>
-      <td class="reason">${(a.reasoning||"").slice(0,220)}</td></tr>`;}).join("")+`</table>`;
+      <td class="reason">${esc((a.reasoning||"").slice(0,220))}</td></tr>`;}).join("")+`</table>`;
 }
 
 function renderChips(symbols){

@@ -5,8 +5,11 @@ Async tasks:
   * one monitor loop (SL/TP/adaptive exits, journal, learning updates)
   * dashboard web server
 
-PAPER TRADING ONLY. No exchange credentials are ever loaded; no order
-endpoint is ever called.
+Paper trading is always simulated. Real Bybit orders are placed ONLY when
+ALL of these hold (see app/trading/executor.py): config live.enabled=true,
+BYBIT_API_KEY/BYBIT_API_SECRET present, and env LIVE_CONFIRM=YES. Otherwise
+the executor runs in dry-run: it logs the order it would send, sends nothing.
+Real orders are notional-capped by live.max_notional_usd.
 """
 from __future__ import annotations
 

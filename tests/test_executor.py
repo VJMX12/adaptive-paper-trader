@@ -1,5 +1,11 @@
-"""Execution-layer safety gates: dry-run never touches the network,
-live sizes are clamped to the notional cap."""
+"""Execution-layer safety gates:
+  * dry-run never touches the network
+  * live requires enabled + keys + LIVE_CONFIRM=YES (explicit arming interlock)
+  * live sizes are clamped to the notional cap
+  * non-finite price/size is refused, never sent
+"""
+import pytest
+
 from app.config import AppConfig, Secrets
 from app.trading.executor import BybitExecutor
 
@@ -19,9 +25,23 @@ def _cfg(live: bool, key: str = "", secret: str = "") -> AppConfig:
     )
 
 
+@pytest.fixture
+def armed(monkeypatch):
+    monkeypatch.setenv("LIVE_CONFIRM", "YES")
+
+
+@pytest.fixture
+def disarmed(monkeypatch):
+    monkeypatch.delenv("LIVE_CONFIRM", raising=False)
+
+
 class FakeExchange:
     def __init__(self):
         self.orders = []
+        self.sandbox = False
+
+    def set_sandbox_mode(self, on):
+        self.sandbox = on
 
     def amount_to_precision(self, _s, q):
         return f"{float(q):.8f}"
@@ -38,7 +58,7 @@ class FakeExchange:
         pass
 
 
-async def test_disabled_executor_never_creates_client():
+async def test_disabled_executor_never_creates_client(armed):
     ex = BybitExecutor(_cfg(live=False, key="k", secret="s"))
     assert ex.live is False
     assert await ex.open_position(TRADE) is None
@@ -47,15 +67,24 @@ async def test_disabled_executor_never_creates_client():
     await ex.close()
 
 
-async def test_enabled_without_keys_stays_dry_run():
-    ex = BybitExecutor(_cfg(live=True))  # no keys in env
+async def test_enabled_without_keys_stays_dry_run(armed):
+    ex = BybitExecutor(_cfg(live=True))  # no keys
     assert ex.live is False
     assert await ex.open_position(TRADE) is None
     assert ex._exchange is None
     await ex.close()
 
 
-async def test_live_clamps_qty_to_notional_cap():
+async def test_enabled_with_keys_but_not_confirmed_stays_dry_run(disarmed):
+    # The arming interlock: keys present, live.enabled true, but LIVE_CONFIRM unset.
+    ex = BybitExecutor(_cfg(live=True, key="k", secret="s"))
+    assert ex.live is False
+    assert await ex.open_position(TRADE) is None
+    assert ex._exchange is None
+    await ex.close()
+
+
+async def test_live_clamps_qty_to_notional_cap(armed):
     ex = BybitExecutor(_cfg(live=True, key="k", secret="s"))
     fake = FakeExchange()
     ex._exchange = fake  # bypass real client construction
@@ -76,10 +105,21 @@ async def test_live_clamps_qty_to_notional_cap():
     assert abs(c["qty"] - 200.0 / 50000.0) < 1e-9  # close mirrors clamped qty
 
 
-async def test_live_small_order_not_clamped():
+async def test_live_small_order_not_clamped(armed):
     ex = BybitExecutor(_cfg(live=True, key="k", secret="s"))
     fake = FakeExchange()
     ex._exchange = fake
     oid = await ex.open_position(TRADE)  # 0.002 * 50k = $100 < cap
     assert oid == "fake-1"
     assert abs(fake.orders[0]["qty"] - 0.002) < 1e-9
+
+
+@pytest.mark.parametrize("bad", [0.0, -50000.0, float("nan"), float("inf")])
+async def test_live_refuses_non_finite_price(armed, bad):
+    ex = BybitExecutor(_cfg(live=True, key="k", secret="s"))
+    fake = FakeExchange()
+    ex._exchange = fake
+    assert ex.live is True
+    trade = dict(TRADE, entry_price=bad)
+    assert await ex.open_position(trade) is None
+    assert fake.orders == []  # nothing sent — cap bypass closed

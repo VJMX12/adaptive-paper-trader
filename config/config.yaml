@@ -109,12 +109,13 @@ exchange:
   candles_lookback: 600  # candles fetched per analysis cycle
 
 live:
-  # MASTER SWITCH for real orders on Bybit.
-  #   false -> dry-run: every order the system WOULD send is logged in full
-  #            (side, qty, SL/TP, notional) but nothing is ever transmitted.
-  #   true  -> real orders, only if BYBIT_API_KEY/BYBIT_API_SECRET env vars
-  #            are set (Railway variables / .env). Without keys: dry-run.
+  # Real orders on Bybit require ALL THREE, else dry-run (logs, never sends):
+  #   1. enabled: true               (this flag)
+  #   2. BYBIT_API_KEY + BYBIT_API_SECRET env vars present
+  #   3. env LIVE_CONFIRM=YES         (explicit arming — keys alone won't arm)
+  # Dry-run logs every order it WOULD send (side, qty, SL/TP, notional).
   enabled: true
+  testnet: false            # true -> Bybit testnet (validate live wiring, no real money)
   max_notional_usd: 200.0   # per-order notional cap; larger sizes are CLAMPED down
 
 engine:
