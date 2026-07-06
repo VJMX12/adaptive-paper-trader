@@ -1,0 +1,8 @@
+ccxt>=4.3
+numpy>=1.26
+scipy>=1.11
+aiosqlite>=0.20
+aiohttp>=3.9
+PyYAML>=6.0
+python-dotenv>=1.0
+structlog>=24.1

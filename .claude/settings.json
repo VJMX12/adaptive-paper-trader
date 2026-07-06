@@ -1,0 +1,11 @@
+{
+  "permissions": {
+    "allow": [
+      "Skill(claude-api)",
+      "Skill(claude-api:*)",
+      "Bash(grep -v -E '\\\\.\\(db|json\\)$|__pycache__|\\\\.git/')",
+      "Bash(grep -v -E '\\\\.git/|__pycache__|\\\\.db$')",
+      "Bash(echo \"dockerignore: $?\")"
+    ]
+  }
+}

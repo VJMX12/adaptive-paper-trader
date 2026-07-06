@@ -1,0 +1,12 @@
+.env
+data/*.db
+data/learner_state.json
+__pycache__/
+*.pyc
+.pytest_cache/
+.venv/
+.claude-flow/
+.swarm/
+.claude/settings.local.json
+.DS_Store
+*.log

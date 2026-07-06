@@ -1,0 +1,77 @@
+# Adaptive Paper Trader configuration
+# All secrets go in .env — never in this file.
+
+exchange:
+  id: bybit              # any ccxt exchange id with public market data
+  market_type: swap      # swap = USDT linear perpetuals (long & short); spot = spot market
+  symbols:
+    - BTC/USDT:USDT      # ccxt unified symbol for Bybit linear perpetual
+    - ETH/USDT:USDT
+  timeframe: 5m
+  candles_lookback: 600  # candles fetched per analysis cycle
+
+live:
+  # MASTER SWITCH for real orders on Bybit.
+  #   false -> dry-run: every order the system WOULD send is logged in full
+  #            (side, qty, SL/TP, notional) but nothing is ever transmitted.
+  #   true  -> real orders, only if BYBIT_API_KEY/BYBIT_API_SECRET are in .env.
+  enabled: false
+  max_notional_usd: 200.0   # hard cap per order (entry * qty) once live
+
+engine:
+  analysis_interval_seconds: 300   # run one full analysis per symbol every N seconds
+  monitor_interval_seconds: 20     # check open paper trades every N seconds
+  warmup_candles: 250              # minimum candles before the engine will act
+
+regime:
+  n_states: 4          # discovered, unlabeled regimes
+  fit_window: 1500     # candles used when (re)fitting the HMM
+  refit_every: 288     # analysis cycles between HMM refits
+  sticky: 0.97         # self-transition prior (regime persistence)
+
+changepoint:
+  hazard: 250.0        # expected run length between changepoints (in candles)
+  alert_threshold: 0.35  # P(changepoint in last few candles) above this = uncertainty alarm
+
+strategy:
+  min_confidence: 0.60   # do not trade below this calibrated confidence
+  min_rr: 1.5            # minimum acceptable risk/reward
+  sl_sigma_mult: 1.6     # stop distance in units of current volatility sigma
+  tp_rr: 2.0             # take-profit distance = tp_rr * stop distance
+  cooldown_minutes: 45   # per-symbol cooldown after closing a trade
+  max_trade_hours: 48    # time-based exit safety net
+
+risk:
+  starting_equity: 10000.0
+  base_risk_pct: 0.01        # risk per trade at full multipliers
+  kelly_fraction: 0.25       # fraction of full Kelly ever used
+  max_open_positions: 3
+  vol_target_annual: 0.35    # annualized volatility target for scaling
+  drawdown_soft_pct: 0.05    # exposure starts decaying past this drawdown
+  drawdown_hard_pct: 0.15    # circuit breaker: no new trades beyond this
+  max_daily_loss_pct: 0.04   # circuit breaker: halt new entries for the day
+
+retrieval:
+  k: 15                # similar historical trades retrieved per analysis
+  min_history: 8       # below this many closed trades, retrieval is informational only
+
+llm:
+  enabled: false             # true = use Anthropic API for narrative reasoning & reviews
+  model: claude-sonnet-4-6
+  max_tokens: 800
+
+telegram:
+  enabled: true
+  # token & chat id come from .env: TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID
+
+dashboard:
+  enabled: true
+  host: 0.0.0.0
+  port: 8787
+
+database:
+  path: data/paper_trader.db
+
+logging:
+  level: INFO
+  json: false     # true = JSON lines (for shipping to a log stack)
