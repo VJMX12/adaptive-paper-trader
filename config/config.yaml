@@ -4,26 +4,107 @@
 exchange:
   id: bybit              # any ccxt exchange id with public market data
   market_type: swap      # swap = USDT linear perpetuals (long & short); spot = spot market
-  symbols:                 # ccxt unified symbols for Bybit linear perpetuals
+  symbols:                 # top-100 Bybit USDT linear perps by 24h volume
     - BTC/USDT:USDT
     - ETH/USDT:USDT
     - SOL/USDT:USDT
     - XRP/USDT:USDT
-    - BNB/USDT:USDT
+    - HYPE/USDT:USDT
+    - LAB/USDT:USDT
     - DOGE/USDT:USDT
+    - VANRY/USDT:USDT
     - ADA/USDT:USDT
+    - XAU/USDT:USDT
+    - TLM/USDT:USDT
+    - NEAR/USDT:USDT
+    - ZEC/USDT:USDT
+    - WLD/USDT:USDT
+    - LIT/USDT:USDT
+    - SLX/USDT:USDT
+    - BNB/USDT:USDT
+    - 1000PEPE/USDT:USDT
+    - SOXL/USDT:USDT
+    - SUI/USDT:USDT
+    - XAG/USDT:USDT
+    - CAP/USDT:USDT
+    - AAVE/USDT:USDT
+    - HMSTR/USDT:USDT
+    - MU/USDT:USDT
+    - ENA/USDT:USDT
+    - LTC/USDT:USDT
+    - FARTCOIN/USDT:USDT
+    - KORU/USDT:USDT
+    - EPIC/USDT:USDT
+    - XLM/USDT:USDT
+    - ONDO/USDT:USDT
+    - BCH/USDT:USDT
+    - BABA/USDT:USDT
+    - PUMPFUN/USDT:USDT
+    - SNDK/USDT:USDT
     - LINK/USDT:USDT
     - AVAX/USDT:USDT
-    - SUI/USDT:USDT
-    - LTC/USDT:USDT
+    - 1000BONK/USDT:USDT
+    - XAUT/USDT:USDT
+    - ES/USDT:USDT
+    - SPCX/USDT:USDT
+    - XPL/USDT:USDT
+    - TRUMP/USDT:USDT
+    - TRX/USDT:USDT
+    - TAO/USDT:USDT
+    - XMR/USDT:USDT
+    - BTW/USDT:USDT
+    - CL/USDT:USDT
+    - GRAM/USDT:USDT
+    - SKHYNIX/USDT:USDT
+    - BEAT/USDT:USDT
+    - CRCL/USDT:USDT
+    - TRB/USDT:USDT
+    - ID/USDT:USDT
+    - PENGU/USDT:USDT
+    - EWY/USDT:USDT
+    - UNI/USDT:USDT
+    - VELVET/USDT:USDT
+    - DRAM/USDT:USDT
+    - WIF/USDT:USDT
     - DOT/USDT:USDT
-    - NEAR/USDT:USDT
-    - APT/USDT:USDT
+    - BILL/USDT:USDT
+    - PYTH/USDT:USDT
+    - TIA/USDT:USDT
+    - RESOLV/USDT:USDT
+    - HBAR/USDT:USDT
+    - WLFI/USDT:USDT
+    - ARX/USDT:USDT
+    - INJ/USDT:USDT
+    - BEL/USDT:USDT
+    - TAIKO/USDT:USDT
+    - GRASS/USDT:USDT
+    - JUP/USDT:USDT
+    - VIRTUAL/USDT:USDT
+    - VVV/USDT:USDT
+    - BIRB/USDT:USDT
+    - MON/USDT:USDT
+    - DEXE/USDT:USDT
+    - MSTR/USDT:USDT
+    - H/USDT:USDT
+    - MIRA/USDT:USDT
+    - RE/USDT:USDT
+    - M/USDT:USDT
     - ARB/USDT:USDT
     - OP/USDT:USDT
-    - UNI/USDT:USDT
+    - ICP/USDT:USDT
+    - EIGEN/USDT:USDT
+    - MAGMA/USDT:USDT
+    - GWEI/USDT:USDT
+    - GIGGLE/USDT:USDT
+    - O/USDT:USDT
+    - KAITO/USDT:USDT
+    - AIGENSYN/USDT:USDT
+    - 4/USDT:USDT
+    - APT/USDT:USDT
+    - CAKE/USDT:USDT
+    - ETHFI/USDT:USDT
     - ATOM/USDT:USDT
-    - TRX/USDT:USDT
+    - RPL/USDT:USDT
   timeframe: 5m
   candles_lookback: 600  # candles fetched per analysis cycle
 

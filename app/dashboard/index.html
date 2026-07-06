@@ -50,7 +50,8 @@ tr:hover td{background:var(--panel2)}
 .meter u{position:absolute;top:-2px;bottom:-2px;width:2px;background:var(--ink3)}
 .meter.cp i{background:var(--warn)}
 .empty{color:var(--ink3);padding:18px 4px;font-size:12.5px}
-.chips{display:flex;gap:8px;margin:12px 0 0}
+.chips{display:flex;gap:8px;margin:12px 0 0;flex-wrap:wrap;align-items:center}
+.chips select{background:var(--panel);color:var(--ink);border:1px solid var(--line);border-radius:6px;padding:4px 8px;font:inherit;font-size:12px}
 .chip{cursor:pointer;border:1px solid var(--line);color:var(--ink2);border-radius:999px;padding:3px 12px;font-size:11px;letter-spacing:.1em}
 .chip.on{color:var(--accent);border-color:var(--accent)}
 #wrap{position:relative}
@@ -233,6 +234,13 @@ function renderAnalyses(rows, minConf){
 
 function renderChips(symbols){
   const names=["ALL",...(symbols||[]).map(shortSym)];
+  if(names.length > 13){  // many markets: dropdown instead of a chip wall
+    $("#chips").innerHTML = `<span class="chip on">MARKET</span>
+      <select id="symsel">${names.map(n=>`<option ${SYM===n?"selected":""}>${n}</option>`).join("")}</select>
+      <span style="color:var(--ink3);font-size:11px">${names.length-1} markets tracked</span>`;
+    $("#symsel").onchange = e=>{SYM=e.target.value; tick();};
+    return;
+  }
   $("#chips").innerHTML = names.map(n=>`<span class="chip ${SYM===n?"on":""}" data-s="${n}">${n}</span>`).join("");
   document.querySelectorAll(".chip").forEach(ch=>ch.onclick=()=>{SYM=ch.dataset.s; tick();});
 }
@@ -240,7 +248,7 @@ function renderChips(symbols){
 async function tick(){
   try{
     const [m,pos,tr,an,eq] = await Promise.all(
-      ["/metrics","/positions","/trades?limit=60","/analyses?limit=80","/equity"]
+      ["/metrics","/positions","/trades?limit=60","/analyses?limit=250","/equity"]
       .map(u=>fetch(u).then(r=>r.json())));
     CURVE=eq;
     renderSys(m); renderTiles(m); renderChart();
