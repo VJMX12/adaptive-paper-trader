@@ -326,21 +326,68 @@ function renderLearner(L){
      <div style="margin-top:8px;font-size:11px"><a href="/learner">⤓ full learner JSON</a></div>`;
 }
 
-async function tick(){
+// -------- live state, updated by the SSE stream (server push, per second) --------
+const STATE = {metrics:null, positions:[], trades:[], analyses:[], learner:null};
+
+function renderLight(){
+  // cheap per-second updates: equity hero, open count, clock, positions
+  const m = STATE.metrics;
+  if(m){
+    const d = STATE.equity - m.starting_equity;
+    const hero = document.querySelector("#tiles .tile.hero");
+    if(hero){
+      hero.querySelector(".v").textContent = usd(STATE.equity);
+      hero.querySelector(".s").className = "s "+sign(d);
+      hero.querySelector(".s").innerHTML = `${d>=0?"▲":"▼"} ${usd(Math.abs(d)).replace("−","")} (${pct(d/m.starting_equity)}) since start`;
+    }
+  }
+  renderPositions(STATE.positions);
+  $("#sync").textContent = new Date().toLocaleTimeString();
+}
+
+function renderHeavy(){
+  const m = STATE.metrics; if(!m) return;
+  renderSys(m); renderTiles(m); renderChart();
+  renderChips((m.system||{}).symbols);
+  renderTrades(STATE.trades);
+  renderOutcomes(STATE.trades);
+  renderLearner(STATE.learner);
+  renderAnalyses(STATE.analyses, (m.system||{}).min_confidence ?? .6);
+}
+
+function applyPayload(p){
+  if("equity" in p) STATE.equity = p.equity;
+  if(p.positions) STATE.positions = p.positions;
+  let heavy = false;
+  if(p.metrics){ STATE.metrics = p.metrics; heavy = true; }
+  if(p.trades) STATE.trades = p.trades;
+  if(p.analyses) STATE.analyses = p.analyses;
+  if(p.equity_curve) CURVE = p.equity_curve;
+  if(p.learner) STATE.learner = p.learner;
+  renderLight();
+  if(heavy) renderHeavy();
+}
+
+// Prefer SSE (server pushes each second, no polling lag). Fall back to
+// interval polling if the stream errors (e.g. proxy strips it).
+let _es=null, _pollTimer=null;
+async function pollOnce(){
   try{
     const [m,pos,tr,an,eq,L] = await Promise.all(
       ["/metrics","/positions","/trades?limit=500","/analyses?limit=250","/equity","/learner"]
       .map(u=>fetch(u).then(r=>r.json())));
-    CURVE=eq;
-    renderSys(m); renderTiles(m); renderChart();
-    renderChips((m.system||{}).symbols);
-    renderPositions(pos); renderTrades(tr);
-    renderOutcomes(tr); renderLearner(L);
-    renderAnalyses(an,(m.system||{}).min_confidence ?? .6);
-    $("#sync").textContent = new Date().toLocaleTimeString();
+    applyPayload({metrics:m, positions:pos, trades:tr, analyses:an, equity_curve:eq, learner:L});
   }catch(e){ $("#sync").textContent = "offline?"; }
 }
-tick(); setInterval(tick, 15000);
+function startPolling(){ if(_pollTimer) return; pollOnce(); _pollTimer=setInterval(pollOnce, 10000); }
+function startStream(){
+  try{
+    _es = new EventSource("/stream");
+    _es.onmessage = ev => { try{ applyPayload(JSON.parse(ev.data)); }catch(_){} };
+    _es.onerror = () => { if(_es){ _es.close(); _es=null; } startPolling(); };
+  }catch(e){ startPolling(); }
+}
+pollOnce().then(startStream);  // first paint immediately, then live stream
 window.addEventListener("resize", renderChart);
 </script>
 </body></html>

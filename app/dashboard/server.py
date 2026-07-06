@@ -16,6 +16,7 @@ dashboard is open (a warning is logged at startup).
 """
 from __future__ import annotations
 
+import asyncio
 import base64
 import csv
 import hmac
@@ -65,6 +66,27 @@ def _clamp_limit(req, default: int, hi: int) -> int:
     return max(1, min(v, hi))
 
 
+async def _snapshot(db, starting_equity, info, learner_provider, heavy: bool) -> dict:
+    """Build a live payload. Light fields every tick; heavy fields periodically."""
+    payload: dict = {
+        "open": await db.open_positions_count(),
+        "equity": await db.latest_equity(starting_equity),
+        "positions": [{k: r.get(k) for k in _TRADE_COLS}
+                      for r in await db.get_open_trades()],
+    }
+    if heavy:
+        m = await compute_metrics(db, starting_equity)
+        m["system"] = info
+        payload["metrics"] = m
+        closed = await db.get_closed_trades(limit=5000)
+        payload["trades"] = [{k: r.get(k) for k in _TRADE_COLS}
+                             for r in closed[-500:][::-1]]
+        payload["analyses"] = await db.recent_analyses(250)
+        payload["equity_curve"] = await db.equity_curve()
+        payload["learner"] = learner_provider() if learner_provider else {}
+    return payload
+
+
 @web.middleware
 async def _security_mw(request, handler):
     # --- optional Basic Auth (only enforced when DASHBOARD_PASS is set) ---
@@ -92,8 +114,10 @@ async def _security_mw(request, handler):
         for k, v in _SEC_HEADERS.items():
             e.headers.setdefault(k, v)
         raise
-    for k, v in _SEC_HEADERS.items():
-        resp.headers.setdefault(k, v)
+    # A streaming response (SSE) is already prepared/sent — headers are frozen.
+    if not getattr(resp, "prepared", False):
+        for k, v in _SEC_HEADERS.items():
+            resp.headers.setdefault(k, v)
     return resp
 
 
@@ -135,6 +159,31 @@ def build_app(db: Database, starting_equity: float,
         snap = learner_provider() if learner_provider else {}
         return web.json_response(snap, dumps=_dumps)
 
+    async def stream(request):
+        """Server-Sent Events: push live state every second (server-driven,
+        no client polling). Light fields each tick; heavy fields every 5s."""
+        resp = web.StreamResponse(headers={
+            "Content-Type": "text/event-stream; charset=utf-8",
+            "Cache-Control": "no-cache, no-transform",
+            "X-Accel-Buffering": "no",  # disable proxy buffering (Railway edge)
+            "Connection": "keep-alive",
+        })
+        await resp.prepare(request)
+        seq = 0
+        try:
+            while True:
+                snap = await _snapshot(db, starting_equity, info,
+                                       learner_provider, heavy=(seq % 5 == 0))
+                snap["seq"] = seq
+                await resp.write(b"data: " + _dumps(snap).encode() + b"\n\n")
+                seq += 1
+                await asyncio.sleep(1)
+        except (ConnectionResetError, asyncio.CancelledError):
+            pass
+        except Exception as e:  # client dropped / write failed — end cleanly
+            log.info("sse_closed", error=str(e))
+        return resp
+
     async def trades_csv(_req):
         """Full closed-trade history as CSV for offline analysis."""
         rows = await db.get_closed_trades(limit=100000)
@@ -156,6 +205,7 @@ def build_app(db: Database, starting_equity: float,
     app.router.add_get("/analyses", analyses)
     app.router.add_get("/equity", equity)
     app.router.add_get("/learner", learner)
+    app.router.add_get("/stream", stream)
     app.router.add_get("/export/trades.csv", trades_csv)
     return app
 
