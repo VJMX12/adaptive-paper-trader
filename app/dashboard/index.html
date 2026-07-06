@@ -368,26 +368,29 @@ function applyPayload(p){
   if(heavy) renderHeavy();
 }
 
-// Prefer SSE (server pushes each second, no polling lag). Fall back to
-// interval polling if the stream errors (e.g. proxy strips it).
-let _es=null, _pollTimer=null;
-async function pollOnce(){
+// Two-tier polling: a cheap /live payload every 1s (equity, open, positions)
+// for lag-free per-second liveness, and the heavy set every 8s. This streams
+// through any proxy (Railway buffers SSE), so updates never stall.
+let _beatFail=0;
+async function lightTick(){
   try{
-    const [m,pos,tr,an,eq,L] = await Promise.all(
-      ["/metrics","/positions","/trades?limit=500","/analyses?limit=250","/equity","/learner"]
+    const p = await fetch("/live").then(r=>r.json());
+    applyPayload(p);              // updates equity hero, open count, positions, clock
+    _beatFail=0;
+  }catch(e){ if(++_beatFail>3) $("#sync").textContent="offline?"; }
+}
+async function heavyTick(){
+  try{
+    const [m,tr,an,eq,L] = await Promise.all(
+      ["/metrics","/trades?limit=500","/analyses?limit=250","/equity","/learner"]
       .map(u=>fetch(u).then(r=>r.json())));
-    applyPayload({metrics:m, positions:pos, trades:tr, analyses:an, equity_curve:eq, learner:L});
-  }catch(e){ $("#sync").textContent = "offline?"; }
+    applyPayload({metrics:m, trades:tr, analyses:an, equity_curve:eq, learner:L});
+  }catch(e){ /* light tick keeps the clock honest */ }
 }
-function startPolling(){ if(_pollTimer) return; pollOnce(); _pollTimer=setInterval(pollOnce, 10000); }
-function startStream(){
-  try{
-    _es = new EventSource("/stream");
-    _es.onmessage = ev => { try{ applyPayload(JSON.parse(ev.data)); }catch(_){} };
-    _es.onerror = () => { if(_es){ _es.close(); _es=null; } startPolling(); };
-  }catch(e){ startPolling(); }
-}
-pollOnce().then(startStream);  // first paint immediately, then live stream
+async function boot(){ await heavyTick(); await lightTick(); }
+boot();
+setInterval(lightTick, 1000);   // per-second live updates
+setInterval(heavyTick, 8000);   // metrics / learner / tables / chart
 window.addEventListener("resize", renderChart);
 </script>
 </body></html>

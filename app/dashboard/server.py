@@ -154,6 +154,16 @@ def build_app(db: Database, starting_equity: float,
     async def equity(_req):
         return web.json_response(await db.equity_curve(), dumps=_dumps)
 
+    async def live(_req):
+        """Cheap per-second payload (no metrics scan): equity, open, positions.
+        Polled every 1s by the client for lag-free liveness through any proxy."""
+        return web.json_response({
+            "open": await db.open_positions_count(),
+            "equity": await db.latest_equity(starting_equity),
+            "positions": [{k: r.get(k) for k in _TRADE_COLS}
+                          for r in await db.get_open_trades()],
+        }, dumps=_dumps)
+
     async def learner(_req):
         """Extractable learning state: model weights + calibration quality."""
         snap = learner_provider() if learner_provider else {}
@@ -204,6 +214,7 @@ def build_app(db: Database, starting_equity: float,
     app.router.add_get("/trades", trades)
     app.router.add_get("/analyses", analyses)
     app.router.add_get("/equity", equity)
+    app.router.add_get("/live", live)
     app.router.add_get("/learner", learner)
     app.router.add_get("/stream", stream)
     app.router.add_get("/export/trades.csv", trades_csv)
