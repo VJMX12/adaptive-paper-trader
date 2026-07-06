@@ -80,3 +80,34 @@ async def test_order_reconciliation_persistence(tmp_path):
     await db.set_live_order("t1", status="closed")
     assert await db.open_live_orders() == []
     await db.close()
+
+
+def test_dedupe_prevents_double_count():
+    from app.analysis.walkforward import _dedupe
+    t = [_trade(0, True, 0.6) for _ in range(3)]
+    for i, x in enumerate(t):
+        x["id"] = i
+    dup = t + t  # same ids twice (as overlapping windows would produce)
+    assert len(_dedupe(dup)) == 3
+
+
+def test_sharpe_is_per_trade_not_sqrt_n_inflated():
+    # The reported sharpe must be a per-trade effect size (mean/std), invariant
+    # to sample size — NOT the old sqrt(n)-scaled statistic. Same per-trade
+    # distribution at 20 vs 500 trades -> ~same sharpe, but t_stat grows ~5x.
+    from app.analysis.walkforward import _metrics
+    small = _metrics([_trade(i, i % 20 < 9, 0.55) for i in range(20)])
+    big = _metrics([_trade(i, i % 20 < 9, 0.55) for i in range(500)])
+    assert abs(small["sharpe"] - big["sharpe"]) < 0.15   # sharpe ~ invariant to n
+    assert big["t_stat"] > 3 * small["t_stat"]           # t_stat scales with sqrt(n)
+
+
+def test_stable_regime_passes_duration():
+    # one unchanging regime over 24h must yield a large duration, not None
+    from app.analysis.walkforward import regime_stability
+    base = datetime(2026, 7, 1, tzinfo=timezone.utc)
+    rows = [{"symbol": "BTC/USDT:USDT", "ts": (base + timedelta(hours=h)).isoformat(),
+             "regime_label": "calm", "changepoint_prob": 0.01} for h in range(0, 25, 2)]
+    r = regime_stability(rows)
+    assert r["avg_state_duration_hours"] is not None
+    assert r["avg_state_duration_hours"] > 6.0

@@ -392,7 +392,8 @@ function renderValidation(v){
      <div style="display:flex;gap:18px;flex-wrap:wrap;margin-bottom:10px">
        ${stat("TEST WIN RATE", om.test_win_rate!=null?pct(om.test_win_rate):"—")}
        ${stat("TEST BRIER", om.test_brier!=null?num(om.test_brier,3):"—")}
-       ${stat("TEST SHARPE", om.test_sharpe!=null?num(om.test_sharpe,2):"—")}
+       ${stat("SHARPE/trade", om.test_sharpe!=null?num(om.test_sharpe,2):"—")}
+       ${stat("t-STAT", om.test_t_stat!=null?num(om.test_t_stat,2):"—")}
        ${stat("DEGRADATION", om.degradation!=null?pct(om.degradation):"—")}
        ${stat("CONSISTENCY σ", om.consistency_std!=null?num(om.consistency_std,3):"—")}
        ${stat("TEST TRADES", (om.n_test_trades!=null?om.n_test_trades:"—")+" / "+(v.valid_test_windows||0)+"w")}

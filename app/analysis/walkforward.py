@@ -19,16 +19,31 @@ import numpy as np
 
 # audit pass criteria
 PASS = {
-    "min_test_win_rate": 0.35,     # 2:1 payoff break-even (with costs)
-    "min_test_sharpe": 0.8,
+    "min_test_win_rate": 0.35,       # 2:1 payoff break-even (with costs)
+    "min_sharpe_per_trade": 0.10,    # effect size (mean/std of per-trade PnL)
+    "min_tstat": 2.0,                # statistical significance (mean/std*sqrt(n))
     "max_test_brier": 0.20,
-    "min_degradation": -0.12,      # test_wr - train_wr must exceed this
+    "min_degradation": -0.12,        # test_wr - train_wr must exceed this
     "max_consistency_std": 0.10,
     "min_regime_hours": 6.0,
     "min_knn_hit_rate": 0.70,
-    "min_trades_per_window": 8,    # a window below this is "insufficient"
+    "min_trades_per_window": 8,      # a window below this is "insufficient"
     "min_test_windows": 4,
 }
+
+
+def _dedupe(trades: list[dict]) -> list[dict]:
+    """Overlapping step windows share trades; dedupe before any overall
+    aggregate so a trade is never counted 2-3x (which biases the verdict)."""
+    seen, out = set(), []
+    for t in trades:
+        key = t.get("id")
+        if key is None:
+            key = (t.get("exit_ts"), t.get("symbol"), t.get("entry_price"))
+        if key not in seen:
+            seen.add(key)
+            out.append(t)
+    return out
 
 
 def _ts(s):
@@ -59,7 +74,11 @@ def _metrics(trades: list[dict]) -> dict:
     payoff = (float(wins.mean() / abs(losses.mean()))
               if len(wins) and len(losses) and losses.mean() != 0 else None)
     ret_std = float(pnl_pct.std(ddof=1)) if n > 1 else 0.0
-    sharpe = float(pnl_pct.mean() / ret_std * np.sqrt(n)) if ret_std > 0 else 0.0
+    # per-trade Sharpe = effect size; t_stat = significance (scales with sqrt n).
+    # Reporting both stops a weak per-trade edge from "passing" just by n.
+    # Guard tiny std (e.g. all-identical outcomes) to avoid a blown-up ratio.
+    sharpe = float(pnl_pct.mean() / ret_std) if ret_std > 1e-9 else 0.0
+    t_stat = float(sharpe * np.sqrt(n))
     # max drawdown on cumulative USD pnl
     cum = np.cumsum(pnl_usd)
     peak = np.maximum.accumulate(np.concatenate([[0.0], cum]))
@@ -76,7 +95,7 @@ def _metrics(trades: list[dict]) -> dict:
         "n": n, "win_rate": round(win_rate, 4),
         "mean_pnl_pct": round(float(pnl_pct.mean()), 4),
         "total_pnl_usd": round(float(pnl_usd.sum()), 2),
-        "sharpe": round(sharpe, 3),
+        "sharpe": round(sharpe, 3), "t_stat": round(t_stat, 3),
         "max_drawdown_usd": round(dd, 2),
         "payoff_ratio": round(payoff, 3) if payoff is not None else None,
         "brier": round(brier, 4), "ece": round(ece, 4),
@@ -137,6 +156,11 @@ def regime_stability(analyses: list[dict]) -> dict:
                     durations_h.append((t_now - ts_run).total_seconds() / 3600.0)
                 run_start = _ts(r["ts"])
                 prev_label = r.get("regime_label")
+        # count the trailing (still-open) run — otherwise a very STABLE regime
+        # with few/no changes yields no durations and wrongly fails the gate.
+        t_end, ts_run = _ts(rows[-1]["ts"]), run_start
+        if t_end and ts_run and t_end > ts_run:
+            durations_h.append((t_end - ts_run).total_seconds() / 3600.0)
     avg_dur = round(float(np.mean(durations_h)), 2) if durations_h else None
     cp_per_day = round(cp_events / span_hours * 24.0, 3) if span_hours > 0 else None
     return {"avg_state_duration_hours": avg_dur,
@@ -192,8 +216,9 @@ def run_walk_forward(closed_trades: list[dict], analyses: list[dict],
                             if te_m.get("n") and tr_m.get("n") else None),
         })
 
-    overall_test = _metrics([t for w in windows for t in w["test"]])
-    overall_train = _metrics([t for w in windows for t in w["train"]])
+    # dedupe across overlapping windows before the overall aggregate
+    overall_test = _metrics(_dedupe([t for w in windows for t in w["test"]]))
+    overall_train = _metrics(_dedupe([t for w in windows for t in w["train"]]))
     consistency = round(float(np.std(test_wrs)), 4) if len(test_wrs) >= 2 else None
     degradation = (round(overall_test.get("win_rate", 0) - overall_train.get("win_rate", 0), 4)
                    if overall_test.get("n") and overall_train.get("n") else None)
@@ -209,7 +234,8 @@ def run_walk_forward(closed_trades: list[dict], analyses: list[dict],
 
     checks = {
         "pass_win_rate": ok(overall_test.get("win_rate", 0) > PASS["min_test_win_rate"]),
-        "pass_sharpe": ok(overall_test.get("sharpe", 0) > PASS["min_test_sharpe"]),
+        "pass_sharpe": ok(overall_test.get("sharpe", 0) > PASS["min_sharpe_per_trade"]
+                          and overall_test.get("t_stat", 0) > PASS["min_tstat"]),
         "pass_calibration": ok(overall_test.get("brier", 1) < PASS["max_test_brier"]),
         "pass_degradation": ok(degradation is not None and degradation > PASS["min_degradation"]),
         "pass_consistency": ok(consistency is not None and consistency < PASS["max_consistency_std"]),
@@ -236,7 +262,8 @@ def run_walk_forward(closed_trades: list[dict], analyses: list[dict],
         "total_windows": len(windows), "valid_test_windows": n_valid_windows,
         "overall_metrics": {
             "test_win_rate": overall_test.get("win_rate"),
-            "test_sharpe": overall_test.get("sharpe"),
+            "test_sharpe": overall_test.get("sharpe"),      # per-trade (effect size)
+            "test_t_stat": overall_test.get("t_stat"),      # significance
             "test_brier": overall_test.get("brier"),
             "test_ece": overall_test.get("ece"),
             "train_win_rate": overall_train.get("win_rate"),
