@@ -104,12 +104,17 @@ footer{margin-top:14px;color:var(--ink3);font-size:11px;display:flex;gap:14px;fl
 </div>
 
 <div class="card" style="margin-top:12px">
+  <h2>Edge validation — walk-forward (out-of-sample)</h2>
+  <div id="validation"><div class="empty">loading validation…</div></div>
+</div>
+
+<div class="card" style="margin-top:12px">
   <h2>Analysis feed — regime · confidence · changepoint</h2>
   <div class="scroll" id="analyses"><div class="empty">waiting for first analysis cycle…</div></div>
 </div>
 
 <footer>
-  <span>raw: <a href="/metrics">/metrics</a> · <a href="/trades">/trades</a> · <a href="/positions">/positions</a> · <a href="/analyses">/analyses</a> · <a href="/equity">/equity</a> · <a href="/learner">/learner</a> · <a href="/export/trades.csv">/export/trades.csv</a></span>
+  <span>raw: <a href="/metrics">/metrics</a> · <a href="/trades">/trades</a> · <a href="/positions">/positions</a> · <a href="/analyses">/analyses</a> · <a href="/equity">/equity</a> · <a href="/learner">/learner</a> · <a href="/validation">/validation</a> · <a href="/export/trades.csv">/export/trades.csv</a></span>
   <span id="foot"></span>
 </footer>
 
@@ -368,6 +373,37 @@ function applyPayload(p){
   if(heavy) renderHeavy();
 }
 
+function renderValidation(v){
+  const ev = v.edge_validation||{}, om = v.overall_metrics||{};
+  let banner, bcol;
+  if(ev.insufficient_data){ banner="⏳ COLLECTING DATA"; bcol="var(--warn)"; }
+  else if(ev.overall_pass){ banner="✓ EDGE VALIDATED"; bcol="var(--good)"; }
+  else { banner="✗ EDGE NOT VALIDATED"; bcol="var(--bad)"; }
+  const checks = [
+    ["win rate", ev.pass_win_rate], ["sharpe", ev.pass_sharpe],
+    ["calibration", ev.pass_calibration], ["degradation", ev.pass_degradation],
+    ["consistency", ev.pass_consistency], ["regime", ev.pass_regime],
+    ["memory", ev.pass_memory]];
+  const chips = checks.map(([k,ok])=>`<span class="chip" style="border-color:${ok?"var(--good)":"var(--ink3)"};color:${ok?"var(--good)":"var(--ink3)"}">${ok?"✓":"·"} ${k}</span>`).join(" ");
+  const stat = (k,val)=>`<div><span style="color:var(--ink3);font-size:10px">${k}</span><div style="font-size:16px;font-weight:700">${val}</div></div>`;
+  $("#validation").innerHTML =
+    `<div style="display:inline-block;padding:4px 12px;border-radius:6px;border:1px solid ${bcol};color:${bcol};letter-spacing:.1em;font-size:12px;margin-bottom:10px">${banner}</div>
+     <div style="color:var(--ink2);font-size:11.5px;margin-bottom:10px">${esc(ev.status||"")}</div>
+     <div style="display:flex;gap:18px;flex-wrap:wrap;margin-bottom:10px">
+       ${stat("TEST WIN RATE", om.test_win_rate!=null?pct(om.test_win_rate):"—")}
+       ${stat("TEST BRIER", om.test_brier!=null?num(om.test_brier,3):"—")}
+       ${stat("TEST SHARPE", om.test_sharpe!=null?num(om.test_sharpe,2):"—")}
+       ${stat("DEGRADATION", om.degradation!=null?pct(om.degradation):"—")}
+       ${stat("CONSISTENCY σ", om.consistency_std!=null?num(om.consistency_std,3):"—")}
+       ${stat("TEST TRADES", (om.n_test_trades!=null?om.n_test_trades:"—")+" / "+(v.valid_test_windows||0)+"w")}
+     </div>
+     <div class="chips" style="margin:0">${chips}</div>
+     <div style="margin-top:8px;font-size:11px"><a href="/validation">⤓ full walk-forward JSON</a></div>`;
+}
+async function validationTick(){
+  try{ renderValidation(await fetch("/validation").then(r=>r.json())); }catch(e){}
+}
+
 // Two-tier polling: a cheap /live payload every 1s (equity, open, positions)
 // for lag-free per-second liveness, and the heavy set every 8s. This streams
 // through any proxy (Railway buffers SSE), so updates never stall.
@@ -387,10 +423,11 @@ async function heavyTick(){
     applyPayload({metrics:m, trades:tr, analyses:an, equity_curve:eq, learner:L});
   }catch(e){ /* light tick keeps the clock honest */ }
 }
-async function boot(){ await heavyTick(); await lightTick(); }
+async function boot(){ await heavyTick(); await lightTick(); validationTick(); }
 boot();
-setInterval(lightTick, 1000);   // per-second live updates
-setInterval(heavyTick, 8000);   // metrics / learner / tables / chart
+setInterval(lightTick, 1000);      // per-second live updates
+setInterval(heavyTick, 8000);      // metrics / learner / tables / chart
+setInterval(validationTick, 30000); // walk-forward validation (heavier scan)
 window.addEventListener("resize", renderChart);
 </script>
 </body></html>

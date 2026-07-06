@@ -68,9 +68,34 @@ CREATE TABLE IF NOT EXISTS equity (
     equity REAL NOT NULL,
     event TEXT
 );
+-- live order tracking (only populated when real Bybit orders are sent) so a
+-- restart can reconcile persisted state against the exchange's positions.
+CREATE TABLE IF NOT EXISTS live_orders (
+    order_id TEXT PRIMARY KEY,           -- our id: "t<trade_id>"
+    trade_id INTEGER,                    -- paper trade this mirrors
+    symbol TEXT NOT NULL,
+    direction TEXT NOT NULL,
+    entry_price REAL NOT NULL,
+    quantity REAL NOT NULL,
+    bybit_order_id TEXT,                 -- exchange order id from create_order
+    order_status TEXT NOT NULL,          -- pending / open / closed / unknown_state
+    regime_state_at_entry TEXT,          -- json snapshot
+    prediction_state_at_entry TEXT,      -- json: raw_prob, confidence, ...
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS order_events (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    order_id TEXT NOT NULL,
+    event_type TEXT NOT NULL,            -- created / entry_filled / closed / reconcile_ok / reconcile_mismatch / app_shutdown
+    details TEXT,                        -- json
+    ts TEXT NOT NULL
+);
 CREATE INDEX IF NOT EXISTS idx_trades_status ON trades(status);
 CREATE INDEX IF NOT EXISTS idx_trades_symbol ON trades(symbol);
 CREATE INDEX IF NOT EXISTS idx_analyses_symbol_ts ON analyses(symbol, ts);
+CREATE INDEX IF NOT EXISTS idx_live_orders_status ON live_orders(order_status);
+CREATE INDEX IF NOT EXISTS idx_order_events_order ON order_events(order_id);
 """
 
 
@@ -254,3 +279,46 @@ class Database:
         )
         row = await cur.fetchone()
         return float(row["s"])
+
+    # ---------- live order tracking (reconciliation) ----------
+    async def record_live_order(self, o: dict[str, Any]) -> None:
+        await self.db.execute(
+            """INSERT OR REPLACE INTO live_orders
+               (order_id, trade_id, symbol, direction, entry_price, quantity,
+                bybit_order_id, order_status, regime_state_at_entry,
+                prediction_state_at_entry, created_at, updated_at)
+               VALUES (?,?,?,?,?,?,?,?,?,?,?,?)""",
+            (o["order_id"], o.get("trade_id"), o["symbol"], o["direction"],
+             o["entry_price"], o["quantity"], o.get("bybit_order_id"),
+             o.get("order_status", "pending"),
+             json.dumps(o.get("regime_state_at_entry")),
+             json.dumps(o.get("prediction_state_at_entry")),
+             o.get("created_at", utcnow()), utcnow()),
+        )
+        await self.db.commit()
+
+    async def set_live_order(self, order_id: str, *, status: str | None = None,
+                             bybit_order_id: str | None = None) -> None:
+        sets, args = ["updated_at=?"], [utcnow()]
+        if status is not None:
+            sets.append("order_status=?"); args.append(status)
+        if bybit_order_id is not None:
+            sets.append("bybit_order_id=?"); args.append(bybit_order_id)
+        args.append(order_id)
+        await self.db.execute(
+            f"UPDATE live_orders SET {', '.join(sets)} WHERE order_id=?", args)
+        await self.db.commit()
+
+    async def open_live_orders(self) -> list[dict]:
+        cur = await self.db.execute(
+            "SELECT * FROM live_orders WHERE order_status IN "
+            "('pending','open','unknown_state')")
+        return [dict(r) for r in await cur.fetchall()]
+
+    async def add_order_event(self, order_id: str, event_type: str,
+                              details: dict | None = None) -> None:
+        await self.db.execute(
+            "INSERT INTO order_events (order_id, event_type, details, ts) "
+            "VALUES (?,?,?,?)",
+            (order_id, event_type, json.dumps(details or {}), utcnow()))
+        await self.db.commit()

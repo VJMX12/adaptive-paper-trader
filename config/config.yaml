@@ -162,6 +162,14 @@ retrieval:
   k: 15                # similar historical trades retrieved per analysis
   min_history: 8       # below this many closed trades, retrieval is informational only
 
+validation:
+  # Walk-forward / prequential out-of-sample validation (exposed at /validation).
+  # Predictions are already OOS (online learner predicts before it updates); these
+  # windows partition the trade log for reporting edge + calibration + degradation.
+  train_days: 14
+  test_days: 7
+  step_days: 3
+
 llm:
   enabled: false             # true = use Anthropic API for narrative reasoning & reviews
   model: claude-sonnet-4-6

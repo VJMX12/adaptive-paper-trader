@@ -121,13 +121,7 @@ class App:
                             res, reasoning, retrieval)
                         if trade_id:
                             t = await self.db.get_trade(trade_id)
-                            try:
-                                await self.executor.open_position(t)
-                            except Exception as e:
-                                log.error("live_open_failed", trade_id=trade_id,
-                                          symbol=symbol, error=str(e),
-                                          hint="paper trade opened but live order "
-                                               "failed — positions may be desynced")
+                            await self._mirror_open(t, res)
                             await self.tg.trade_opened(
                                 trade_id, res, t["position_size"],
                                 t["risk_amount"], reasoning)
@@ -136,6 +130,85 @@ class App:
             except Exception as e:
                 log.error("analyzer_error", symbol=symbol, error=str(e), exc_info=True)
             await _wait(self._stop, interval)
+
+    async def _mirror_open(self, t: dict, res) -> None:
+        """Mirror a paper open onto Bybit. When live, persist the order state
+        BEFORE sending (so a crash mid-send is recoverable) then link the
+        exchange id — this is what lets reconcile_on_startup work."""
+        if not self.executor.live:
+            try:
+                await self.executor.open_position(t)   # dry-run: logs only
+            except Exception as e:
+                log.error("live_open_failed", trade_id=t["id"], error=str(e))
+            return
+        oid = f"t{t['id']}"
+        qty = self.executor.live_qty(t)
+        await self.db.record_live_order({
+            "order_id": oid, "trade_id": t["id"], "symbol": t["symbol"],
+            "direction": t["direction"], "entry_price": t["entry_price"],
+            "quantity": qty if qty is not None else t["position_size"],
+            "order_status": "pending",
+            "regime_state_at_entry": {"label": res.regime_label,
+                                      "posterior": res.regime_posterior,
+                                      "changepoint_prob": res.changepoint_prob},
+            "prediction_state_at_entry": {"raw_prob": res.raw_prob,
+                                          "confidence": res.confidence,
+                                          "rr": res.rr},
+        })
+        await self.db.add_order_event(oid, "created", {"symbol": t["symbol"]})
+        try:
+            bybit_id = await self.executor.open_position(t)
+            await self.db.set_live_order(oid, status="open",
+                                         bybit_order_id=bybit_id or "")
+            await self.db.add_order_event(oid, "entry_filled",
+                                          {"bybit_order_id": bybit_id})
+        except Exception as e:
+            await self.db.set_live_order(oid, status="unknown_state")
+            await self.db.add_order_event(oid, "open_error", {"error": str(e)})
+            log.error("live_open_failed", trade_id=t["id"], symbol=t["symbol"],
+                      error=str(e), hint="paper opened but live order failed")
+
+    async def reconcile_on_startup(self) -> None:
+        """3-way check on restart: persisted live orders vs Bybit positions.
+        Marks vanished positions unknown_state; confirms matches; logs events."""
+        open_orders = await self.db.open_live_orders()
+        if not open_orders:
+            return
+        log.info("reconcile_start", n=len(open_orders), live=self.executor.live)
+        if not self.executor.live:
+            log.warning("reconcile_skipped", reason="not live — leaving persisted "
+                        "orders untouched", n=len(open_orders))
+            return
+        try:
+            positions = await self.executor.fetch_open_positions()
+        except Exception as e:
+            log.error("reconcile_bybit_error", error=str(e),
+                      hint="cannot contact Bybit — manual review advised")
+            return
+        for o in open_orders:
+            oid, sym = o["order_id"], o["symbol"]
+            pos = positions.get(sym)
+            if pos is None:
+                await self.db.set_live_order(oid, status="unknown_state")
+                await self.db.add_order_event(oid, "reconcile_mismatch",
+                                              {"note": "position not on Bybit"})
+                log.warning("reconcile_missing", order_id=oid, symbol=sym)
+                continue
+            pos_qty = abs(float(pos.get("contracts") or 0))
+            side_ok = pos.get("side") == o["direction"]
+            qty_ok = abs(pos_qty - float(o["quantity"])) <= max(
+                0.02 * float(o["quantity"]), 1e-8)
+            if side_ok and qty_ok:
+                await self.db.set_live_order(oid, status="open")
+                await self.db.add_order_event(oid, "reconcile_ok",
+                                              {"qty": pos_qty, "side": pos.get("side")})
+                log.info("reconcile_ok", order_id=oid, symbol=sym)
+            else:
+                await self.db.add_order_event(oid, "reconcile_mismatch", {
+                    "db_qty": o["quantity"], "bybit_qty": pos_qty,
+                    "db_side": o["direction"], "bybit_side": pos.get("side")})
+                log.warning("reconcile_qty_side_mismatch", order_id=oid, symbol=sym)
+        log.info("reconcile_done")
 
     # ------------------------------------------------------------------
     async def monitor_loop(self) -> None:
@@ -168,6 +241,12 @@ class App:
         #    position protected by its exchange-side SL/TP (swap).
         try:
             await self.executor.close_position(trade)
+            if self.executor.live:
+                oid = f"t{trade['id']}"
+                await self.db.set_live_order(oid, status="closed")
+                await self.db.add_order_event(oid, "closed", {
+                    "exit_reason": trade.get("exit_reason"),
+                    "pnl_usd": trade.get("pnl_usd")})
         except Exception as e:
             log.error("live_close_failed", trade_id=trade.get("id"),
                       symbol=trade.get("symbol"), error=str(e),
@@ -196,6 +275,12 @@ class App:
             f"({', '.join(self.cfg.get('exchange.symbols'))}). "
             f"Execution: {mode}.")
 
+        # reconcile persisted live orders against Bybit before trading resumes
+        try:
+            await self.reconcile_on_startup()
+        except Exception as e:
+            log.error("reconcile_error", error=str(e), exc_info=True)
+
         runner = None
         if self.cfg.get("dashboard.enabled"):
             # PORT env (set by Railway & friends) overrides config
@@ -207,6 +292,7 @@ class App:
                     "model": self.model.snapshot(FeatureVector.names()),
                     "calibration": self.calibration.snapshot(),
                 },
+                cfg=self.cfg,
                 info={
                     "mode": mode,
                     "live": self.executor.live,
@@ -234,6 +320,20 @@ class App:
 
         await self._stop.wait()
         log.info("shutting_down")
+        # Log open live orders for recovery — they persist on Bybit (SL/TP
+        # active) and reconcile_on_startup will re-check them on next boot.
+        try:
+            open_live = await self.db.open_live_orders()
+            if open_live:
+                log.info("shutdown_open_live_orders",
+                         n=len(open_live),
+                         orders=[o["order_id"] for o in open_live])
+                for o in open_live:
+                    await self.db.add_order_event(
+                        o["order_id"], "app_shutdown",
+                        {"note": "persists on Bybit; reconcile on next boot"})
+        except Exception as e:
+            log.error("shutdown_order_log_failed", error=str(e))
         for t in tasks:
             t.cancel()
         await asyncio.gather(*tasks, return_exceptions=True)

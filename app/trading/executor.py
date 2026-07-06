@@ -73,6 +73,23 @@ class BybitExecutor:
             await self._exchange.close()
             self._exchange = None
 
+    def live_qty(self, trade: dict) -> float | None:
+        """Public: the actual (clamped) qty that would be sent for this trade."""
+        return self._live_qty(trade)
+
+    async def fetch_open_positions(self) -> dict:
+        """symbol -> position dict for every non-zero live position on Bybit.
+        Empty when not live (nothing on the exchange to reconcile against)."""
+        if not self.live:
+            return {}
+        ex = await self._client()
+        out: dict = {}
+        for p in await ex.fetch_positions():
+            contracts = p.get("contracts") or 0
+            if contracts and abs(float(contracts)) > 0:
+                out[p["symbol"]] = p
+        return out
+
     # ------------------------------------------------------------------
     def _live_qty(self, trade: dict) -> float | None:
         """Paper position size, clamped so entry notional <= the cap.

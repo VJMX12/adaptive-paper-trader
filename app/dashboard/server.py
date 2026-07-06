@@ -27,6 +27,7 @@ from pathlib import Path
 
 from aiohttp import web
 
+from app.analysis.walkforward import run_walk_forward
 from app.dashboard.metrics import compute_metrics
 from app.db.database import Database
 from app.logging_setup import get_logger
@@ -122,7 +123,8 @@ async def _security_mw(request, handler):
 
 
 def build_app(db: Database, starting_equity: float,
-              info: dict | None = None, learner_provider=None) -> web.Application:
+              info: dict | None = None, learner_provider=None,
+              cfg=None) -> web.Application:
     app = web.Application(middlewares=[_security_mw])
     info = info or {}
 
@@ -168,6 +170,13 @@ def build_app(db: Database, starting_equity: float,
         """Extractable learning state: model weights + calibration quality."""
         snap = learner_provider() if learner_provider else {}
         return web.json_response(snap, dumps=_dumps)
+
+    async def validation(_req):
+        """Walk-forward / prequential out-of-sample edge validation."""
+        trades = await db.get_closed_trades(limit=100000)
+        analyses = await db.recent_analyses(5000)
+        return web.json_response(run_walk_forward(trades, analyses, cfg),
+                                 dumps=_dumps)
 
     async def stream(request):
         """Server-Sent Events: push live state every second (server-driven,
@@ -216,6 +225,7 @@ def build_app(db: Database, starting_equity: float,
     app.router.add_get("/equity", equity)
     app.router.add_get("/live", live)
     app.router.add_get("/learner", learner)
+    app.router.add_get("/validation", validation)
     app.router.add_get("/stream", stream)
     app.router.add_get("/export/trades.csv", trades_csv)
     return app
@@ -224,12 +234,12 @@ def build_app(db: Database, starting_equity: float,
 async def start_dashboard(db: Database, starting_equity: float,
                           host: str, port: int,
                           info: dict | None = None,
-                          learner_provider=None) -> web.AppRunner:
+                          learner_provider=None, cfg=None) -> web.AppRunner:
     if not os.getenv("DASHBOARD_PASS"):
         log.warning("dashboard_open",
                     hint="no DASHBOARD_PASS set — dashboard is publicly "
                          "readable. Set DASHBOARD_PASS to require Basic Auth.")
-    app = build_app(db, starting_equity, info, learner_provider)
+    app = build_app(db, starting_equity, info, learner_provider, cfg)
     runner = web.AppRunner(app)
     await runner.setup()
     site = web.TCPSite(runner, host, port)
