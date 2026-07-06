@@ -17,6 +17,13 @@ exchange:
     - SUI/USDT:USDT
     - LTC/USDT:USDT
     - DOT/USDT:USDT
+    - NEAR/USDT:USDT
+    - APT/USDT:USDT
+    - ARB/USDT:USDT
+    - OP/USDT:USDT
+    - UNI/USDT:USDT
+    - ATOM/USDT:USDT
+    - TRX/USDT:USDT
   timeframe: 5m
   candles_lookback: 600  # candles fetched per analysis cycle
 
