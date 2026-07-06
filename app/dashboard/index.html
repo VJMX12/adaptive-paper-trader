@@ -1,0 +1,256 @@
+<!doctype html>
+<html lang="en"><head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>ADAPTIVE TRADER // COMMAND DECK</title>
+<style>
+:root{
+  --bg:#0d0d0d; --panel:#15181d; --panel2:#191d24; --line:#242a33;
+  --ink:#e8edf4; --ink2:#9aa4b2; --ink3:#667082;
+  --accent:#3987e5; --good:#0ca30c; --bad:#ec835a; --warn:#fab219;
+  --glow:0 0 12px rgba(57,135,229,.25);
+}
+*{box-sizing:border-box;margin:0;padding:0}
+body{background:var(--bg);color:var(--ink);font:14px/1.5 ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;padding:18px;max-width:1280px;margin:auto}
+h1{font-size:16px;letter-spacing:.22em;font-weight:600}
+h2{font-size:11px;letter-spacing:.18em;color:var(--ink2);text-transform:uppercase;margin-bottom:10px}
+a{color:var(--accent);text-decoration:none}
+header{display:flex;flex-wrap:wrap;gap:12px;align-items:center;justify-content:space-between;
+  border:1px solid var(--line);border-radius:10px;padding:14px 18px;background:
+  linear-gradient(90deg,rgba(57,135,229,.08),transparent 40%),var(--panel);box-shadow:var(--glow)}
+.sys{display:flex;gap:16px;flex-wrap:wrap;color:var(--ink2);font-size:12px}
+.sys b{color:var(--ink);font-weight:600}
+.badge{padding:3px 10px;border-radius:999px;font-size:11px;letter-spacing:.12em;border:1px solid}
+.badge.dry{color:var(--warn);border-color:var(--warn);animation:pulse 2.2s infinite}
+.badge.live{color:var(--good);border-color:var(--good)}
+.dot{display:inline-block;width:8px;height:8px;border-radius:50%;background:var(--good);margin-right:6px;animation:pulse 2.2s infinite}
+@keyframes pulse{50%{opacity:.35}}
+.grid{display:grid;gap:12px;margin-top:12px}
+.tiles{grid-template-columns:repeat(auto-fit,minmax(140px,1fr))}
+.tile{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:12px 14px;position:relative;overflow:hidden}
+.tile::before{content:"";position:absolute;top:0;left:0;width:26px;height:2px;background:var(--accent);opacity:.7}
+.tile .k{font-size:10px;letter-spacing:.16em;color:var(--ink3);text-transform:uppercase}
+.tile .v{font-size:20px;font-weight:700;margin-top:4px;font-variant-numeric:tabular-nums}
+.tile .s{font-size:11px;color:var(--ink2)}
+.tile.hero .v{font-size:30px}
+.pos{color:var(--good)}.neg{color:var(--bad)}.wrn{color:var(--warn)}
+.card{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:16px}
+.cols{grid-template-columns:1fr 1fr}
+@media(max-width:900px){.cols{grid-template-columns:1fr}}
+table{border-collapse:collapse;width:100%;font-size:12.5px}
+th{color:var(--ink3);font-size:10px;letter-spacing:.14em;text-transform:uppercase;text-align:left;padding:6px 8px;border-bottom:1px solid var(--line)}
+td{padding:6px 8px;border-bottom:1px solid var(--line);font-variant-numeric:tabular-nums;white-space:nowrap}
+tr:hover td{background:var(--panel2)}
+.dir{padding:1px 8px;border-radius:4px;font-size:11px;border:1px solid}
+.dir.long{color:var(--good);border-color:var(--good)}
+.dir.short{color:var(--bad);border-color:var(--bad)}
+.bias-bullish{color:var(--good)}.bias-bearish{color:var(--bad)}.bias-neutral{color:var(--ink2)}
+.meter{height:6px;background:var(--panel2);border-radius:3px;position:relative;min-width:70px}
+.meter i{position:absolute;left:0;top:0;bottom:0;border-radius:3px;background:var(--accent)}
+.meter u{position:absolute;top:-2px;bottom:-2px;width:2px;background:var(--ink3)}
+.meter.cp i{background:var(--warn)}
+.empty{color:var(--ink3);padding:18px 4px;font-size:12.5px}
+.chips{display:flex;gap:8px;margin:12px 0 0}
+.chip{cursor:pointer;border:1px solid var(--line);color:var(--ink2);border-radius:999px;padding:3px 12px;font-size:11px;letter-spacing:.1em}
+.chip.on{color:var(--accent);border-color:var(--accent)}
+#wrap{position:relative}
+#tip{position:absolute;display:none;background:var(--panel2);border:1px solid var(--line);border-radius:6px;padding:6px 9px;font-size:11.5px;pointer-events:none;white-space:nowrap;z-index:5}
+.reason{white-space:normal;color:var(--ink2);font-size:11.5px;max-width:560px}
+footer{margin-top:14px;color:var(--ink3);font-size:11px;display:flex;gap:14px;flex-wrap:wrap}
+.scroll{overflow-x:auto}
+</style></head><body>
+
+<header>
+  <div>
+    <h1><span class="dot"></span>ADAPTIVE TRADER <span style="color:var(--ink3)">//</span> COMMAND DECK</h1>
+    <div class="sys" id="sysline" style="margin-top:6px">initialising…</div>
+  </div>
+  <div style="display:flex;gap:10px;align-items:center">
+    <span id="mode" class="badge dry">…</span>
+    <span class="sys">sync <b id="sync">—</b></span>
+  </div>
+</header>
+
+<div class="grid tiles" id="tiles"></div>
+
+<div class="card" style="margin-top:12px">
+  <h2>Equity — paper account (USD)</h2>
+  <div id="wrap"><div id="tip"></div><div id="chart" class="scroll"><div class="empty">no equity history yet</div></div></div>
+</div>
+
+<div class="chips" id="chips"></div>
+
+<div class="grid cols" style="margin-top:12px">
+  <div class="card">
+    <h2>Open positions <span id="npos" style="color:var(--accent)"></span></h2>
+    <div class="scroll" id="positions"><div class="empty">none — engine is waiting for an earned edge</div></div>
+  </div>
+  <div class="card">
+    <h2>Orders / closed trades</h2>
+    <div class="scroll" id="trades"><div class="empty">no completed trades yet</div></div>
+  </div>
+</div>
+
+<div class="card" style="margin-top:12px">
+  <h2>Analysis feed — regime · confidence · changepoint</h2>
+  <div class="scroll" id="analyses"><div class="empty">waiting for first analysis cycle…</div></div>
+</div>
+
+<footer>
+  <span>raw: <a href="/metrics">/metrics</a> · <a href="/trades">/trades</a> · <a href="/positions">/positions</a> · <a href="/analyses">/analyses</a> · <a href="/equity">/equity</a></span>
+  <span id="foot"></span>
+</footer>
+
+<script>
+"use strict";
+const $ = s => document.querySelector(s);
+let SYM = "ALL", CURVE = [];
+
+const usd = v => (v==null ? "—" : (v<0?"−$":"$") + Math.abs(v).toLocaleString("en-US",{minimumFractionDigits:2,maximumFractionDigits:2}));
+const num = (v,d=2) => v==null ? "—" : Number(v).toFixed(d);
+const pct = (v,d=1) => v==null ? "—" : (v*100).toFixed(d)+"%";
+const sign = v => v>0?"pos":(v<0?"neg":"");
+function ago(ts){ if(!ts) return "—"; const s=(Date.now()-new Date(ts))/1e3;
+  if(s<90) return Math.round(s)+"s"; if(s<5400) return Math.round(s/60)+"m";
+  if(s<172800) return (s/3600).toFixed(1)+"h"; return (s/86400).toFixed(1)+"d"; }
+const fsym = r => SYM==="ALL" || (r.symbol||"").startsWith(SYM);
+const shortSym = s => (s||"").split("/")[0];
+
+function tile(k,v,cls="",s=""){ return `<div class="tile"><div class="k">${k}</div><div class="v ${cls}">${v}</div>${s?`<div class="s">${s}</div>`:""}</div>`; }
+
+function renderTiles(m){
+  const d = m.equity - m.starting_equity, dp = d/m.starting_equity;
+  $("#tiles").innerHTML =
+    `<div class="tile hero"><div class="k">Equity</div><div class="v">${usd(m.equity)}</div>
+     <div class="s ${sign(d)}">${d>=0?"▲":"▼"} ${usd(Math.abs(d)).replace("−","")} (${pct(dp)}) since start</div></div>`
+    + tile("Total PnL", usd(m.total_pnl_usd ?? 0), sign(m.total_pnl_usd))
+    + tile("Win rate", m.win_rate!=null?pct(m.win_rate):"—","", m.n_trades?`${m.n_trades} trades`:"no trades yet")
+    + tile("Profit factor", num(m.profit_factor))
+    + tile("Avg R", num(m.avg_r), sign(m.avg_r))
+    + tile("Max drawdown", m.max_drawdown_pct!=null?num(m.max_drawdown_pct)+"%":"—", m.max_drawdown_pct>10?"wrn":"")
+    + tile("Sharpe/trade", num(m.sharpe_per_trade))
+    + tile("Brier score", num(m.brier_score,3), "", "lower = honest confidence")
+    + tile("Open", `${m.open_positions}`,"", "positions");
+}
+
+function renderSys(m){
+  const s = m.system||{};
+  $("#mode").textContent = s.live ? "LIVE ORDERS" : "DRY-RUN · NO REAL ORDERS";
+  $("#mode").className = "badge " + (s.live?"live":"dry");
+  $("#sysline").innerHTML =
+    `<span>exchange <b>${s.exchange||"—"} ${s.market_type||""}</b></span>`+
+    `<span>markets <b>${(s.symbols||[]).map(shortSym).join(" · ")}</b> @ ${s.timeframe||""}</span>`+
+    `<span>conf. floor <b>${num(s.min_confidence,2)}</b></span>`+
+    (s.live?`<span>notional cap <b>${usd(s.max_notional_usd)}</b></span>`:"");
+  $("#foot").textContent = s.live ? "" : "live trading locked: live.enabled=false — every order is simulated & logged only";
+}
+
+function renderChart(){
+  const el = $("#chart");
+  let c = CURVE ? [...CURVE] : [];
+  if(c.length === 1) c = [c[0], {ts:new Date().toISOString(), equity:c[0].equity, event:"now"}];
+  if(c.length < 2){ return; }
+  const W=1180,H=240,P=34;
+  const xs=c.map(p=>+new Date(p.ts)), ys=c.map(p=>p.equity);
+  const x0=Math.min(...xs), x1=Math.max(...xs), y0=Math.min(...ys), y1=Math.max(...ys);
+  const yl=y0-(y1-y0||1)*.08, yh=y1+(y1-y0||1)*.08;
+  const X=t=>P+(t-x0)/((x1-x0)||1)*(W-2*P), Y=v=>H-P+ (v-yl)/((yh-yl)||1)*(2*P-H);
+  const pts=c.map((p,i)=>`${X(xs[i]).toFixed(1)},${Y(ys[i]).toFixed(1)}`);
+  const grid=[0,.25,.5,.75,1].map(f=>{const y=Y(yl+f*(yh-yl));
+    return `<line x1="${P}" x2="${W-P}" y1="${y}" y2="${y}" stroke="#242a33" stroke-width="1"/>`+
+           `<text x="${P-6}" y="${y+4}" fill="#667082" font-size="10" text-anchor="end">${Math.round(yl+f*(yh-yl)).toLocaleString()}</text>`;}).join("");
+  el.innerHTML =
+   `<svg id="svg" viewBox="0 0 ${W} ${H}" width="100%" height="${H}" style="min-width:640px">
+      ${grid}
+      <path d="M${pts.join(" L")} L${X(x1)},${H-P} L${X(x0)},${H-P} Z" fill="rgba(57,135,229,.12)"/>
+      <polyline points="${pts.join(" ")}" fill="none" stroke="#3987e5" stroke-width="2"/>
+      <line id="cross" y1="${P}" y2="${H-P}" stroke="#667082" stroke-dasharray="3,3" visibility="hidden"/>
+      <circle id="mark" r="4" fill="#3987e5" stroke="#0d0d0d" stroke-width="2" visibility="hidden"/>
+    </svg>`;
+  const svg=$("#svg"), tip=$("#tip");
+  svg.onmousemove = e=>{
+    const r=svg.getBoundingClientRect(), fx=(e.clientX-r.left)/r.width*W;
+    let bi=0,bd=1e18; xs.forEach((t,i)=>{const d=Math.abs(X(t)-fx); if(d<bd){bd=d;bi=i;}});
+    const cx=X(xs[bi]), cy=Y(ys[bi]);
+    $("#cross").setAttribute("x1",cx); $("#cross").setAttribute("x2",cx);
+    $("#cross").setAttribute("visibility","visible");
+    const mk=$("#mark"); mk.setAttribute("cx",cx); mk.setAttribute("cy",cy); mk.setAttribute("visibility","visible");
+    tip.style.display="block";
+    tip.innerHTML=`<b>${usd(ys[bi])}</b><br><span style="color:var(--ink3)">${new Date(xs[bi]).toLocaleString()}</span><br><span style="color:var(--ink3)">${c[bi].event||""}</span>`;
+    const wr=$("#wrap").getBoundingClientRect();
+    tip.style.left=Math.min(e.clientX-wr.left+14, wr.width-170)+"px";
+    tip.style.top=(e.clientY-wr.top-14)+"px";
+  };
+  svg.onmouseleave = ()=>{ tip.style.display="none";
+    $("#cross").setAttribute("visibility","hidden"); $("#mark").setAttribute("visibility","hidden"); };
+}
+
+function meter(v, thr, warn){
+  const w=Math.max(0,Math.min(1,v))*100;
+  return `<div class="meter ${warn?"cp":""}"><i style="width:${w}%"></i>${thr!=null?`<u style="left:${thr*100}%"></u>`:""}</div>`;
+}
+
+function renderPositions(rows){
+  rows = rows.filter(fsym);
+  $("#npos").textContent = rows.length? `· ${rows.length}` : "";
+  if(!rows.length){ $("#positions").innerHTML=`<div class="empty">none — engine is waiting for an earned edge</div>`; return; }
+  $("#positions").innerHTML = `<table><tr><th>#</th><th>sym</th><th>dir</th><th>entry</th><th>SL</th><th>TP</th><th>size</th><th>conf</th><th>age</th><th>MAE/MFE</th></tr>`+
+    rows.map(t=>`<tr><td>${t.id}</td><td>${shortSym(t.symbol)}</td>
+      <td><span class="dir ${t.direction}">${t.direction}</span></td>
+      <td>${num(t.entry_price)}</td><td class="neg">${num(t.stop_loss)}</td><td class="pos">${num(t.take_profit)}</td>
+      <td>${num(t.position_size,6)}</td><td>${num(t.confidence,2)}</td>
+      <td>${ago(t.entry_ts)}</td><td>${num(t.mae_pct,2)}/${num(t.mfe_pct,2)}%</td></tr>`).join("")+`</table>`;
+}
+
+function renderTrades(rows){
+  rows = rows.filter(fsym).slice(0,25);
+  if(!rows.length){ $("#trades").innerHTML=`<div class="empty">no completed trades yet — every close will appear here with PnL, R and exit reason</div>`; return; }
+  $("#trades").innerHTML = `<table><tr><th>#</th><th>sym</th><th>dir</th><th>entry→exit</th><th>PnL</th><th>R</th><th>exit</th><th>held</th><th>closed</th></tr>`+
+    rows.map(t=>`<tr><td>${t.id}</td><td>${shortSym(t.symbol)}</td>
+      <td><span class="dir ${t.direction}">${t.direction}</span></td>
+      <td>${num(t.entry_price)} → ${num(t.exit_price)}</td>
+      <td class="${sign(t.pnl_usd)}">${t.pnl_usd>0?"+":""}${usd(t.pnl_usd).replace("$","$")}</td>
+      <td class="${sign(t.r_multiple)}">${num(t.r_multiple)}R</td>
+      <td>${t.exit_reason||"—"}</td>
+      <td>${t.duration_minutes!=null? (t.duration_minutes>90? (t.duration_minutes/60).toFixed(1)+"h" : Math.round(t.duration_minutes)+"m") : "—"}</td>
+      <td>${ago(t.exit_ts)} ago</td></tr>`).join("")+`</table>`;
+}
+
+function renderAnalyses(rows, minConf){
+  rows = rows.filter(fsym).slice(0,14);
+  if(!rows.length){ $("#analyses").innerHTML=`<div class="empty">waiting for first analysis cycle…</div>`; return; }
+  $("#analyses").innerHTML = `<table><tr><th>when</th><th>sym</th><th>price</th><th>bias</th><th>confidence</th><th>regime</th><th>changepoint</th><th>signal</th><th>reasoning</th></tr>`+
+    rows.map(a=>{
+      const cp = a.changepoint_prob||0, alarm = cp>=0.35;
+      return `<tr><td>${ago(a.ts)}</td><td>${shortSym(a.symbol)}</td><td>${num(a.price)}</td>
+      <td class="bias-${a.bias}">${a.bias}</td>
+      <td><div style="display:flex;gap:8px;align-items:center">${meter(a.confidence,minConf)}<span>${num(a.confidence,2)}</span></div></td>
+      <td>${a.regime_label||"—"}</td>
+      <td><div style="display:flex;gap:8px;align-items:center">${meter(cp,0.35,alarm)}<span class="${alarm?"wrn":""}">${num(cp,2)}</span></div></td>
+      <td>${a.trade_recommended?`<span class="pos">◉ TRADE</span>`:`<span style="color:var(--ink3)">standby</span>`}</td>
+      <td class="reason">${(a.reasoning||"").slice(0,220)}</td></tr>`;}).join("")+`</table>`;
+}
+
+function renderChips(symbols){
+  const names=["ALL",...(symbols||[]).map(shortSym)];
+  $("#chips").innerHTML = names.map(n=>`<span class="chip ${SYM===n?"on":""}" data-s="${n}">${n}</span>`).join("");
+  document.querySelectorAll(".chip").forEach(ch=>ch.onclick=()=>{SYM=ch.dataset.s; tick();});
+}
+
+async function tick(){
+  try{
+    const [m,pos,tr,an,eq] = await Promise.all(
+      ["/metrics","/positions","/trades?limit=60","/analyses?limit=80","/equity"]
+      .map(u=>fetch(u).then(r=>r.json())));
+    CURVE=eq;
+    renderSys(m); renderTiles(m); renderChart();
+    renderChips((m.system||{}).symbols);
+    renderPositions(pos); renderTrades(tr);
+    renderAnalyses(an,(m.system||{}).min_confidence ?? .6);
+    $("#sync").textContent = new Date().toLocaleTimeString();
+  }catch(e){ $("#sync").textContent = "offline?"; }
+}
+tick(); setInterval(tick, 15000);
+window.addEventListener("resize", renderChart);
+</script>
+</body></html>

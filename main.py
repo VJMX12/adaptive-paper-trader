@@ -178,7 +178,19 @@ class App:
             port = int(os.getenv("PORT", self.cfg.get("dashboard.port", 8787)))
             runner = await start_dashboard(
                 self.db, self.risk.starting_equity,
-                self.cfg.get("dashboard.host", "0.0.0.0"), port)
+                self.cfg.get("dashboard.host", "0.0.0.0"), port,
+                info={
+                    "mode": mode,
+                    "live": self.executor.live,
+                    "exchange": self.cfg.get("exchange.id"),
+                    "market_type": self.cfg.get("exchange.market_type", "swap"),
+                    "symbols": self.cfg.get("exchange.symbols"),
+                    "timeframe": self.cfg.get("exchange.timeframe"),
+                    "min_confidence": float(
+                        self.cfg.get("strategy.min_confidence", 0.6)),
+                    "max_notional_usd": float(
+                        self.cfg.get("live.max_notional_usd", 0)),
+                })
             log.info("dashboard_up", port=port)
 
         tasks = [asyncio.create_task(self.analyzer_loop(s))

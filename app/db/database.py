@@ -116,6 +116,13 @@ class Database:
         await self.db.commit()
         return cur.lastrowid
 
+    async def recent_analyses(self, limit: int = 40) -> list[dict]:
+        cur = await self.db.execute(
+            """SELECT id, ts, symbol, price, bias, confidence, raw_prob,
+               regime_label, changepoint_prob, trade_recommended, reasoning
+               FROM analyses ORDER BY id DESC LIMIT ?""", (limit,))
+        return [dict(r) for r in await cur.fetchall()]
+
     # ---------- trades ----------
     async def open_trade(self, t: dict[str, Any]) -> int:
         cur = await self.db.execute(
