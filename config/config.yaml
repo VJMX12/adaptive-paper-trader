@@ -4,9 +4,19 @@
 exchange:
   id: bybit              # any ccxt exchange id with public market data
   market_type: swap      # swap = USDT linear perpetuals (long & short); spot = spot market
-  symbols:
-    - BTC/USDT:USDT      # ccxt unified symbol for Bybit linear perpetual
+  symbols:                 # ccxt unified symbols for Bybit linear perpetuals
+    - BTC/USDT:USDT
     - ETH/USDT:USDT
+    - SOL/USDT:USDT
+    - XRP/USDT:USDT
+    - BNB/USDT:USDT
+    - DOGE/USDT:USDT
+    - ADA/USDT:USDT
+    - LINK/USDT:USDT
+    - AVAX/USDT:USDT
+    - SUI/USDT:USDT
+    - LTC/USDT:USDT
+    - DOT/USDT:USDT
   timeframe: 5m
   candles_lookback: 600  # candles fetched per analysis cycle
 
@@ -14,9 +24,10 @@ live:
   # MASTER SWITCH for real orders on Bybit.
   #   false -> dry-run: every order the system WOULD send is logged in full
   #            (side, qty, SL/TP, notional) but nothing is ever transmitted.
-  #   true  -> real orders, only if BYBIT_API_KEY/BYBIT_API_SECRET are in .env.
-  enabled: false
-  max_notional_usd: 200.0   # hard cap per order (entry * qty) once live
+  #   true  -> real orders, only if BYBIT_API_KEY/BYBIT_API_SECRET env vars
+  #            are set (Railway variables / .env). Without keys: dry-run.
+  enabled: true
+  max_notional_usd: 200.0   # per-order notional cap; larger sizes are CLAMPED down
 
 engine:
   analysis_interval_seconds: 300   # run one full analysis per symbol every N seconds

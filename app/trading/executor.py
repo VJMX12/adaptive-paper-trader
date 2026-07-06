@@ -7,9 +7,11 @@ Mirrors the paper engine's decisions onto Bybit:
 Safety gates, in order:
   1. ``live.enabled`` in config must be true       (default: false)
   2. BYBIT_API_KEY / BYBIT_API_SECRET must be set in .env
-  3. per-order notional hard cap (``live.max_notional_usd``)
+  3. per-order notional cap (``live.max_notional_usd``): the paper size is
+     CLAMPED down so entry notional never exceeds the cap — the paper brain
+     can size for $10k of simulated equity while real orders stay small.
 
-While any gate fails, every order intent is logged in full
+While gate 1 or 2 fails, every order intent is logged in full
 (``live_dry_run_*`` events) so the numbers can be studied — but nothing
 is ever transmitted to the exchange.
 """
@@ -55,12 +57,21 @@ class BybitExecutor:
             self._exchange = None
 
     # ------------------------------------------------------------------
-    def _intent(self, trade: dict, side: str, ref_price: float) -> dict:
+    def _live_qty(self, trade: dict) -> float:
+        """Paper position size, clamped so entry notional <= the cap."""
         qty = float(trade["position_size"])
+        entry = float(trade["entry_price"])
+        if entry > 0 and qty * entry > self.max_notional:
+            qty = self.max_notional / entry
+        return qty
+
+    def _intent(self, trade: dict, side: str, ref_price: float) -> dict:
+        qty = self._live_qty(trade)
         return {
             "symbol": trade["symbol"], "side": side, "type": "market",
             "qty": round(qty, 8), "ref_price": ref_price,
             "notional_usd": round(qty * ref_price, 2),
+            "paper_qty": round(float(trade["position_size"]), 8),
             "market_type": self.market_type,
         }
 
@@ -73,13 +84,10 @@ class BybitExecutor:
 
         if not self.live:
             log.info("live_dry_run_open", sent=False,
-                     note="order NOT sent (live.enabled=false)", **intent)
+                     note="order NOT sent (dry-run)", **intent)
             return None
-        if intent["notional_usd"] > self.max_notional:
-            log.warning("live_order_blocked",
-                        reason=f"notional {intent['notional_usd']} > cap "
-                               f"{self.max_notional}", **intent)
-            return None
+        if intent["qty"] < intent["paper_qty"]:
+            log.info("live_qty_clamped", cap_usd=self.max_notional, **intent)
 
         ex = await self._client()
         symbol = trade["symbol"]
@@ -104,7 +112,7 @@ class BybitExecutor:
 
         if not self.live:
             log.info("live_dry_run_close", sent=False,
-                     note="order NOT sent (live.enabled=false)", **intent)
+                     note="order NOT sent (dry-run)", **intent)
             return None
 
         ex = await self._client()
