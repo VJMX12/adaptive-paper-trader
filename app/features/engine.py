@@ -48,6 +48,24 @@ class FeatureVector:
     def names() -> list[str]:
         return list(FeatureVector.__dataclass_fields__.keys())
 
+    # Directional features whose sign flips when a setup is viewed as a SHORT
+    # (positive = bullish). Non-directional features (volatility, range, R²)
+    # are left unchanged. close_position is mirrored; the two shadows swap.
+    _NEGATE = ("ret_1", "ret_6", "ret_24", "ret_72",
+               "signed_flow", "ob_imbalance", "slope_24", "slope_96")
+
+    def oriented(self, direction: str) -> np.ndarray:
+        """Feature vector re-expressed so that 'positive = favorable for THIS
+        trade direction'. A short is the mirror image of a long, so one model
+        can learn a single P(win) map for both directions (no 1-p complement)."""
+        d = asdict(self)
+        if direction == "short":
+            for k in self._NEGATE:
+                d[k] = -d[k]
+            d["close_position"] = 1.0 - d["close_position"]
+            d["upper_shadow"], d["lower_shadow"] = d["lower_shadow"], d["upper_shadow"]
+        return np.array(list(d.values()), dtype=float)
+
 
 def _log_returns(close: np.ndarray) -> np.ndarray:
     return np.diff(np.log(np.maximum(close, EPS)))
@@ -82,7 +100,8 @@ def compute_features(snap: MarketSnapshot) -> FeatureVector:
 
     sigma_short = float(np.std(r[-48:], ddof=1))
     sigma_long = float(np.std(r[-192:], ddof=1)) if len(r) >= 192 else sigma_short
-    sigma_ratio = sigma_short / max(sigma_long, EPS)
+    # clip: a near-flat long window can send this to 1e6 and dominate z-scoring
+    sigma_ratio = float(np.clip(sigma_short / max(sigma_long, EPS), 0.0, 10.0))
 
     rng = (h[-24:] - l[-24:]) / np.maximum(c[-24:], EPS)
     hi96, lo96 = float(h[-96:].max()), float(l[-96:].min())

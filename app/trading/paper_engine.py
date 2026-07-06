@@ -24,6 +24,11 @@ class PaperTradingEngine:
         self.risk = risk
         self.cooldown_minutes = float(cfg.get("strategy.cooldown_minutes", 45))
         self.min_conf = float(cfg.get("strategy.min_confidence", 0.6))
+        self.costs = {
+            "taker_fee_pct": float(cfg.get("costs.taker_fee_pct", 0.0)),
+            "slippage_pct": float(cfg.get("costs.slippage_pct", 0.0)),
+            "funding_pct_per_8h": float(cfg.get("costs.funding_pct_per_8h", 0.0)),
+        }
         # Serialize the check-then-open critical section. With one analyzer
         # loop per symbol (100+), concurrent opens could each read
         # open_positions_count below the cap and all pass, overshooting
@@ -102,23 +107,37 @@ class PaperTradingEngine:
         return trade_id, "opened"
 
     @staticmethod
-    def compute_close(trade: dict, exit_price: float, exit_reason: str) -> dict:
+    def compute_close(trade: dict, exit_price: float, exit_reason: str,
+                      costs: dict | None = None) -> dict:
         entry = float(trade["entry_price"])
         size = float(trade["position_size"])
         sign = 1.0 if trade["direction"] == "long" else -1.0
-        pnl_usd = sign * (exit_price - entry) * size
-        pnl_pct = sign * (exit_price - entry) / entry * 100.0
-        risk = float(trade["risk_amount"]) or 1e-9
-        r_multiple = pnl_usd / risk
+        gross = sign * (exit_price - entry) * size
         try:
             t0 = datetime.fromisoformat(trade["entry_ts"])
             dur = (datetime.now(timezone.utc) - t0).total_seconds() / 60.0
         except ValueError:
             dur = 0.0
+
+        # Realistic frictions so the learner/calibrator train on tradeable PnL,
+        # not a cost-free market. Fees+slippage on both fills; funding prorated
+        # over the hold. Defaults to zero when no costs are supplied.
+        costs = costs or {}
+        fee = float(costs.get("taker_fee_pct", 0.0))
+        slip = float(costs.get("slippage_pct", 0.0))
+        fund_8h = float(costs.get("funding_pct_per_8h", 0.0))
+        entry_notional, exit_notional = entry * size, exit_price * size
+        cost = ((fee + slip) * (entry_notional + exit_notional)
+                + fund_8h * exit_notional * (dur / 60.0 / 8.0))
+        pnl_usd = gross - cost
+        pnl_pct = (pnl_usd / max(entry_notional, 1e-9)) * 100.0
+        risk = float(trade["risk_amount"]) or 1e-9
+        r_multiple = pnl_usd / risk
         return {
             "exit_ts": utcnow(), "exit_price": exit_price,
             "exit_reason": exit_reason,
             "pnl_usd": round(pnl_usd, 6), "pnl_pct": round(pnl_pct, 6),
             "r_multiple": round(r_multiple, 4),
             "duration_minutes": round(dur, 2),
+            "costs_usd": round(cost, 6),
         }

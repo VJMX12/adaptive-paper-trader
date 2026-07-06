@@ -17,6 +17,10 @@ from pathlib import Path
 import numpy as np
 
 EPS = 1e-9
+# Bump when feature semantics or the learning target change, so a persisted
+# state trained under the old scheme is discarded on load instead of poisoning
+# the new model. v2: direction-oriented features + P(win)-per-direction target.
+MODEL_VERSION = 2
 
 
 class OnlineLogistic:
@@ -44,13 +48,21 @@ class OnlineLogistic:
             return (x - self.mean) / np.maximum(std, EPS)
         return x - self.mean
 
+    def observe(self, x: np.ndarray) -> None:
+        """Advance z-score stats on EVERY analyzed feature vector, so the
+        normalizer reflects the true feature distribution — not only the
+        selection-biased subset of trades that opened and closed."""
+        self._normalize(x, update_stats=True)
+
     def predict_proba(self, x: np.ndarray) -> float:
         z = self._normalize(x, update_stats=False)
         s = float(self.w @ z + self.b)
         return float(1.0 / (1.0 + np.exp(-np.clip(s, -30, 30))))
 
     def update(self, x: np.ndarray, y: int) -> None:
-        z = self._normalize(x, update_stats=True)
+        # Stats already advance in observe() on every analysis; do NOT advance
+        # them again here (that would double-count and bias toward closed trades).
+        z = self._normalize(x, update_stats=False)
         p = 1.0 / (1.0 + np.exp(-np.clip(float(self.w @ z + self.b), -30, 30)))
         g = p - float(y)
         self.w -= self.lr * (g * z + self.l2 * self.w)
@@ -171,6 +183,7 @@ def save_learner_state(path: str | Path, model: OnlineLogistic, cal: Calibration
     # allow_nan=False: refuse to persist NaN/Inf weights. A non-finite weight
     # would otherwise reload verbatim and poison sizing permanently (sticky).
     Path(path).write_text(json.dumps({
+        "version": MODEL_VERSION,
         "model": model.to_dict(), "calibration": cal.to_dict(),
     }, allow_nan=False))
 
@@ -181,6 +194,8 @@ def load_learner_state(path: str | Path, n_features: int):
         return OnlineLogistic(n_features), CalibrationTracker()
     try:
         d = json.loads(p.read_text())
+        if d.get("version") != MODEL_VERSION:  # old scheme -> retrain fresh
+            return OnlineLogistic(n_features), CalibrationTracker()
         model = OnlineLogistic.from_dict(d["model"])
         if model.n != n_features:  # feature schema changed -> start fresh
             return OnlineLogistic(n_features), CalibrationTracker()

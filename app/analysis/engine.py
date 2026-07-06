@@ -55,12 +55,15 @@ class AnalysisEngine:
         self.cfg = cfg
         self.model = model
         self.calibration = calibration
-        self.hmm = StickyGaussianHMM(
-            n_states=int(cfg.get("regime.n_states", 4)),
-            sticky=float(cfg.get("regime.sticky", 0.97)),
-        )
+        # Per-symbol HMM + refit counter: 5m return scale differs ~10-20x
+        # across the universe, so one shared HMM fit on one symbol produces a
+        # degenerate posterior for every other. Each symbol gets its own
+        # (BOCPD already is per-symbol).
+        self._n_states = int(cfg.get("regime.n_states", 4))
+        self._sticky = float(cfg.get("regime.sticky", 0.97))
+        self.hmms: dict[str, StickyGaussianHMM] = {}
+        self._cycles_since_fit: dict[str, int] = {}
         self.bocpd: dict[str, BOCPD] = {}
-        self._cycles_since_fit = 10**9  # force fit on first cycle
         self.refit_every = int(cfg.get("regime.refit_every", 288))
         self.fit_window = int(cfg.get("regime.fit_window", 1500))
         tf = cfg.get("exchange.timeframe", "5m")
@@ -73,62 +76,77 @@ class AnalysisEngine:
         self.cp_alert = float(cfg.get("changepoint.alert_threshold", 0.35))
 
     # ---------- regime machinery ----------
-    def _ensure_regime_models(self, snap: MarketSnapshot) -> tuple[np.ndarray, str, float]:
+    def _ensure_regime_models(self, snap: MarketSnapshot):
+        sym = snap.symbol
         obs = regime_observations(snap)
-        if self._cycles_since_fit >= self.refit_every or not self.hmm.fitted:
-            self.hmm.fit(obs[-self.fit_window:])
-            self._cycles_since_fit = 0
+        hmm = self.hmms.get(sym)
+        if hmm is None:
+            hmm = StickyGaussianHMM(n_states=self._n_states, sticky=self._sticky)
+            self.hmms[sym] = hmm
+            self._cycles_since_fit[sym] = 10**9  # force fit on first cycle
+        if self._cycles_since_fit[sym] >= self.refit_every or not hmm.fitted:
+            hmm.fit(obs[-self.fit_window:])
+            self._cycles_since_fit[sym] = 0
         else:
-            self._cycles_since_fit += 1
+            self._cycles_since_fit[sym] += 1
 
-        posterior = self.hmm.filter_posterior(obs[-300:])
-        labels = self.hmm.describe_states()
+        posterior = hmm.filter_posterior(obs[-300:])
+        labels = hmm.describe_states()
         top = int(np.argmax(posterior))
         regime_label = f"{labels[top]} (state {top})"
 
-        det = self.bocpd.get(snap.symbol)
+        det = self.bocpd.get(sym)
         if det is None:
             det = BOCPD(hazard=float(self.cfg.get("changepoint.hazard", 250.0)))
             det.update_many(obs[-300:, 0])  # warm start on history
-            self.bocpd[snap.symbol] = det
+            self.bocpd[sym] = det
         else:
             det.update(float(obs[-1, 0]))   # one new candle per cycle
         cp_prob = det.p_recent_changepoint(within=6)
-        return posterior, regime_label, cp_prob
+        return posterior, regime_label, cp_prob, hmm
 
     # ---------- direction & probability ----------
-    def _directional_view(self, fv: FeatureVector, posterior: np.ndarray) -> tuple[str, float]:
-        """Candidate direction + learner probability that it reaches TP first.
+    def _directional_view(self, fv: FeatureVector, posterior: np.ndarray,
+                          hmm: StickyGaussianHMM) -> tuple[str, float]:
+        """Pick the direction and its P(win) that it reaches TP before SL.
 
-        Direction candidate = sign of a drift score built from learned regime
-        drift and recent multi-horizon returns (a *belief*, refined by the
-        learner's probability — not a crossover rule).
+        The model predicts P(win) on DIRECTION-ORIENTED features (a short is
+        the mirror of a long), so P(short wins) is computed DIRECTLY from the
+        short-oriented features — never as 1 - P(long). Direction is chosen by
+        whichever side has the higher P(win), with a drift prior for cold start.
         """
+        # feed the normalizer on every analysis (unbiased feature distribution)
+        self.model.observe(fv.as_array())
+
         drift = 0.0
-        if self.hmm.fitted:
-            drift = float(np.dot(posterior, self.hmm.means[:, 0]))  # E[return | regimes]
+        if hmm.fitted:
+            drift = float(np.dot(posterior, hmm.means[:, 0]))  # E[return | regimes]
         score = np.tanh(drift / 1e-4) + 0.6 * np.tanh(fv.slope_96 / 2.0) \
             + 0.3 * np.tanh(fv.ret_24 / max(fv.sigma * 5, 1e-9)) \
             + 0.2 * np.tanh(fv.signed_flow * 3) + 0.1 * np.tanh(fv.ob_imbalance * 3)
-        direction = "long" if score >= 0 else "short"
-        raw_prob = self.model.predict_proba(fv.as_array())
-        # learner predicts P(long-favorable); mirror for shorts
-        p_model = raw_prob if direction == "long" else 1.0 - raw_prob
 
-        # Cold-start bootstrap: an untrained learner always says 0.50, which
-        # would mean "never trade, never learn". Blend a structural prior
-        # (bounded by the drift-score strength) that hands over to the
-        # learner as real trade outcomes accumulate.
-        p_prior = 0.5 + 0.22 * float(np.tanh(abs(score)))
+        # learner's P(win) for each side from its own oriented features
+        p_long = self.model.predict_proba(fv.oriented("long"))
+        p_short = self.model.predict_proba(fv.oriented("short"))
+
+        # Cold-start: an untrained learner says ~0.50 for both, so hand the
+        # direction to the drift belief and keep confidence modest (a bounded
+        # prior that fades out as real outcomes accumulate).
         w = min(1.0, self.model.n_updates / 40.0)
-        p_dir = w * p_model + (1.0 - w) * p_prior
-        return direction, float(p_dir)
+        prior_mag = 0.20 * float(np.tanh(abs(score)))     # <=0.20 -> caps prior at 0.70
+        favored = "long" if score >= 0 else "short"
+        p_long_b = w * p_long + (1 - w) * (0.5 + (prior_mag if favored == "long" else -prior_mag))
+        p_short_b = w * p_short + (1 - w) * (0.5 + (prior_mag if favored == "short" else -prior_mag))
+
+        if p_long_b >= p_short_b:
+            return "long", float(p_long_b)
+        return "short", float(p_short_b)
 
     # ---------- main entry point ----------
     def analyze(self, snap: MarketSnapshot) -> AnalysisResult:
         fv = compute_features(snap)
-        posterior, regime_label, cp_prob = self._ensure_regime_models(snap)
-        direction, p_dir = self._directional_view(fv, posterior)
+        posterior, regime_label, cp_prob, hmm = self._ensure_regime_models(snap)
+        direction, p_dir = self._directional_view(fv, posterior, hmm)
         shrunk = self.calibration.shrink(p_dir)
 
         price = snap.last_price
@@ -189,9 +207,10 @@ class AnalysisEngine:
                          stated_confidence: float) -> None:
         """Update learner + calibration after a closed trade.
 
-        Learner target is 'long-favorable': a long win or a short loss => y=1.
+        Single coherent target: on features ORIENTED to the trade's direction,
+        y=1 iff the trade won. A long and a short that both won are the same
+        'favorable setup -> win' example — no long/short target mixing.
         """
-        x = np.array([entry_features[n] for n in FeatureVector.names()], dtype=float)
-        y_long = int(won) if direction == "long" else int(not won)
-        self.model.update(x, y_long)
+        fv = FeatureVector(**{n: float(entry_features[n]) for n in FeatureVector.names()})
+        self.model.update(fv.oriented(direction), int(won))
         self.calibration.record(stated_confidence, int(won))

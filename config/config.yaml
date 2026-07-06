@@ -118,6 +118,13 @@ live:
   testnet: false            # true -> Bybit testnet (validate live wiring, no real money)
   max_notional_usd: 200.0   # per-order notional cap; larger sizes are CLAMPED down
 
+costs:
+  # Frictions subtracted from every simulated close so the learner trains on
+  # realistic (not cost-free) PnL. Bybit linear-perp taker ~0.055%.
+  taker_fee_pct: 0.00055    # per side, on notional
+  slippage_pct: 0.0003      # assumed slippage per side, on notional
+  funding_pct_per_8h: 0.0001  # perpetual funding, prorated by hold time
+
 engine:
   analysis_interval_seconds: 300   # run one full analysis per symbol every N seconds
   monitor_interval_seconds: 20     # check open paper trades every N seconds

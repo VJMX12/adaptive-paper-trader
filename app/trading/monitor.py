@@ -103,7 +103,7 @@ class TradeMonitor:
         if exit_reason is None:
             return None
 
-        close = self.paper.compute_close(trade, exit_price, exit_reason)
+        close = self.paper.compute_close(trade, exit_price, exit_reason, self.paper.costs)
         await self.db.close_trade(trade["id"], close)
         equity = await self.db.latest_equity(
             float(self.cfg.get("risk.starting_equity")))
