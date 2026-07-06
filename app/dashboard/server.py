@@ -167,8 +167,12 @@ def build_app(db: Database, starting_equity: float,
         }, dumps=_dumps)
 
     async def learner(_req):
-        """Extractable learning state: model weights + calibration quality."""
+        """Extractable learning state: model weights + calibration + shadow."""
         snap = learner_provider() if learner_provider else {}
+        try:
+            snap["shadow"] = await db.shadow_counts()
+        except Exception:
+            pass
         return web.json_response(snap, dumps=_dumps)
 
     async def validation(_req):

@@ -2,6 +2,7 @@
 import json
 from datetime import datetime, timedelta, timezone
 
+import numpy as np
 import pytest
 
 from app.analysis.walkforward import assign_windows, _metrics, run_walk_forward
@@ -111,3 +112,29 @@ def test_stable_regime_passes_duration():
     r = regime_stability(rows)
     assert r["avg_state_duration_hours"] is not None
     assert r["avg_state_duration_hours"] > 6.0
+
+
+async def test_shadow_setup_lifecycle(tmp_path):
+    db = Database(str(tmp_path / "s.db")); await db.connect()
+    await db.record_shadow_setup({
+        "symbol": "BTC/USDT:USDT", "direction": "long", "entry_price": 100.0,
+        "entry_ms": 1000, "stop_loss": 98.0, "take_profit": 104.0,
+        "features": {"ret_1": 0.1}})
+    opens = await db.open_shadow_setups("BTC/USDT:USDT")
+    assert len(opens) == 1 and opens[0]["resolved"] == 0
+    await db.resolve_shadow_setup(opens[0]["id"], 1, 1)   # resolved tp-first
+    assert await db.open_shadow_setups("BTC/USDT:USDT") == []
+    counts = await db.shadow_counts()
+    assert counts["resolved"] == 1 and counts["resolved_win_rate"] == 1.0
+    await db.close()
+
+
+def test_ewma_normalizer_forgets():
+    from app.analysis.model import OnlineLogistic
+    m = OnlineLogistic(2, decay=0.9)
+    for _ in range(200):
+        m.observe(np.array([0.0, 0.0]))
+    # then the distribution shifts; EWMA mean must move toward the new level
+    for _ in range(50):
+        m.observe(np.array([10.0, 10.0]))
+    assert m.mean[0] > 5.0   # a frozen Welford mean would still be ~0

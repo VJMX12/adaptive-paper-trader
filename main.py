@@ -14,8 +14,11 @@ Real orders are notional-capped by live.max_notional_usd.
 from __future__ import annotations
 
 import asyncio
+import json
 import os
 import signal
+
+import numpy as np
 
 from app.analysis.engine import AnalysisEngine
 from app.analysis.model import load_learner_state, save_learner_state
@@ -60,6 +63,12 @@ class App:
         self.tg = TelegramNotifier(self.cfg)
         self._stop = asyncio.Event()
         self._analysis_count: dict[str, int] = {}
+        self._shadow_enabled = bool(self.cfg.get("shadow.enabled", True))
+        self._shadow_horizon_ms = float(
+            self.cfg.get("shadow.horizon_hours", 48)) * 3600_000.0
+        self._shadow_max_resolve = int(
+            self.cfg.get("shadow.max_resolve_per_cycle", 80))
+        self._shadow_since_save = 0
 
     # ------------------------------------------------------------------
     async def analyzer_loop(self, symbol: str) -> None:
@@ -110,6 +119,10 @@ class App:
                         "reasoning": reasoning,
                     })
 
+                    # shadow labels: record this setup + resolve matured ones
+                    if self._shadow_enabled:
+                        await self._process_shadows(snap, res)
+
                     # notify analysis (every Nth cycle to avoid spam, always on rec)
                     c = self._analysis_count.get(symbol, 0) + 1
                     self._analysis_count[symbol] = c
@@ -130,6 +143,63 @@ class App:
             except Exception as e:
                 log.error("analyzer_error", symbol=symbol, error=str(e), exc_info=True)
             await _wait(self._stop, interval)
+
+    async def _process_shadows(self, snap, res) -> None:
+        """Record the current setup as a shadow label, then resolve any matured
+        shadow setups for this symbol against the forward price path (did TP hit
+        before SL?) and train the learner on the clean barrier outcome."""
+        sym = snap.symbol
+        # 1) record the current setup (guard degenerate geometry)
+        d, sl, tp = res.shadow_direction, res.shadow_stop, res.shadow_take_profit
+        if (d in ("long", "short") and sl and tp
+                and np.isfinite(sl) and np.isfinite(tp) and sl != res.price):
+            await self.db.record_shadow_setup({
+                "symbol": sym, "direction": d, "entry_price": res.price,
+                "entry_ms": int(snap.ts[-1]), "stop_loss": sl,
+                "take_profit": tp, "features": res.features.as_dict()})
+
+        # 2) resolve matured setups using this snapshot's OHLC path
+        ts, hi, lo = snap.ts, snap.high, snap.low
+        latest_ms = float(ts[-1])
+        oldest_ms = float(ts[0])
+        learned = 0
+        for s in await self.db.open_shadow_setups(sym, self._shadow_max_resolve):
+            e_ms = float(s["entry_ms"])
+            fwd = ts > e_ms
+            if not bool(fwd.any()):
+                continue
+            long = s["direction"] == "long"
+            sl_v, tp_v = float(s["stop_loss"]), float(s["take_profit"])
+            fh, fl = hi[fwd], lo[fwd]
+            if long:
+                tp_idx = np.argmax(fh >= tp_v) if (fh >= tp_v).any() else None
+                sl_idx = np.argmax(fl <= sl_v) if (fl <= sl_v).any() else None
+            else:
+                tp_idx = np.argmax(fl <= tp_v) if (fl <= tp_v).any() else None
+                sl_idx = np.argmax(fh >= sl_v) if (fh >= sl_v).any() else None
+            outcome = None
+            if tp_idx is not None and (sl_idx is None or tp_idx <= sl_idx):
+                outcome = 1
+            elif sl_idx is not None:
+                outcome = 0
+            if outcome is not None:
+                try:
+                    self.engine.learn_from_shadow(
+                        json.loads(s["features"]), s["direction"], bool(outcome))
+                except Exception as e:
+                    log.error("shadow_learn_failed", id=s["id"], error=str(e))
+                await self.db.resolve_shadow_setup(s["id"], 1, outcome)
+                learned += 1
+            elif (latest_ms - e_ms) >= self._shadow_horizon_ms or e_ms < oldest_ms:
+                # neither barrier hit within the horizon / data window -> expire
+                await self.db.resolve_shadow_setup(s["id"], 2, None)
+
+        if learned:
+            self._shadow_since_save += learned
+            if self._shadow_since_save >= 20:   # persist learner periodically
+                save_learner_state(LEARNER_STATE_PATH, self.model, self.calibration)
+                self._shadow_since_save = 0
+            log.info("shadow_resolved", symbol=sym, learned=learned)
 
     async def _mirror_open(self, t: dict, res) -> None:
         """Mirror a paper open onto Bybit. When live, persist the order state
@@ -231,7 +301,8 @@ class App:
         try:
             feats = _json.loads(trade["features"])
             self.engine.learn_from_trade(
-                feats, trade["direction"], won, float(trade["confidence"]))
+                feats, trade["direction"], won, float(trade["confidence"]),
+                exit_reason=trade.get("exit_reason"))
             save_learner_state(LEARNER_STATE_PATH, self.model, self.calibration)
         except Exception as e:
             log.error("learning_update_failed", trade_id=trade.get("id"),

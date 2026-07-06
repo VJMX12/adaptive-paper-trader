@@ -91,11 +91,28 @@ CREATE TABLE IF NOT EXISTS order_events (
     details TEXT,                        -- json
     ts TEXT NOT NULL
 );
+-- shadow setups: the model's preferred direction + barrier every analysis,
+-- resolved later against the forward price path (TP-before-SL) to generate
+-- training labels far beyond the rare actual fills (fixes data starvation).
+CREATE TABLE IF NOT EXISTS shadow_setups (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    symbol TEXT NOT NULL,
+    direction TEXT NOT NULL,
+    entry_ts TEXT NOT NULL,
+    entry_ms INTEGER NOT NULL,           -- entry candle unix ms (for resolution)
+    entry_price REAL NOT NULL,
+    stop_loss REAL NOT NULL,
+    take_profit REAL NOT NULL,
+    features TEXT NOT NULL,
+    resolved INTEGER NOT NULL DEFAULT 0, -- 0 open, 1 resolved, 2 expired
+    outcome INTEGER                      -- 1 tp-first, 0 sl-first
+);
 CREATE INDEX IF NOT EXISTS idx_trades_status ON trades(status);
 CREATE INDEX IF NOT EXISTS idx_trades_symbol ON trades(symbol);
 CREATE INDEX IF NOT EXISTS idx_analyses_symbol_ts ON analyses(symbol, ts);
 CREATE INDEX IF NOT EXISTS idx_live_orders_status ON live_orders(order_status);
 CREATE INDEX IF NOT EXISTS idx_order_events_order ON order_events(order_id);
+CREATE INDEX IF NOT EXISTS idx_shadow_open ON shadow_setups(symbol, resolved);
 """
 
 
@@ -322,3 +339,40 @@ class Database:
             "VALUES (?,?,?,?)",
             (order_id, event_type, json.dumps(details or {}), utcnow()))
         await self.db.commit()
+
+    # ---------- shadow setups (training-label generation) ----------
+    async def record_shadow_setup(self, s: dict[str, Any]) -> None:
+        await self.db.execute(
+            """INSERT INTO shadow_setups
+               (symbol, direction, entry_ts, entry_ms, entry_price, stop_loss,
+                take_profit, features, resolved)
+               VALUES (?,?,?,?,?,?,?,?,0)""",
+            (s["symbol"], s["direction"], s.get("entry_ts", utcnow()),
+             int(s["entry_ms"]), s["entry_price"], s["stop_loss"],
+             s["take_profit"], json.dumps(s["features"])),
+        )
+        await self.db.commit()
+
+    async def open_shadow_setups(self, symbol: str, limit: int = 500) -> list[dict]:
+        cur = await self.db.execute(
+            "SELECT * FROM shadow_setups WHERE symbol=? AND resolved=0 "
+            "ORDER BY id ASC LIMIT ?", (symbol, limit))
+        return [dict(r) for r in await cur.fetchall()]
+
+    async def resolve_shadow_setup(self, sid: int, resolved: int,
+                                   outcome: int | None) -> None:
+        await self.db.execute(
+            "UPDATE shadow_setups SET resolved=?, outcome=? WHERE id=?",
+            (resolved, outcome, sid))
+        await self.db.commit()
+
+    async def shadow_counts(self) -> dict:
+        cur = await self.db.execute(
+            "SELECT resolved, COUNT(*) c, COALESCE(SUM(outcome),0) wins "
+            "FROM shadow_setups GROUP BY resolved")
+        rows = {r["resolved"]: (r["c"], r["wins"]) for r in await cur.fetchall()}
+        resolved = rows.get(1, (0, 0))
+        return {"open": rows.get(0, (0, 0))[0], "resolved": resolved[0],
+                "expired": rows.get(2, (0, 0))[0],
+                "resolved_win_rate": (round(resolved[1] / resolved[0], 4)
+                                      if resolved[0] else None)}

@@ -170,6 +170,14 @@ validation:
   test_days: 7
   step_days: 3
 
+shadow:
+  # Shadow labels: every analysis records the model's preferred setup and later
+  # resolves it against the forward price path (TP-before-SL), training the
+  # learner far beyond the rare live fills. Fixes data starvation + cold-start bias.
+  enabled: true
+  horizon_hours: 48          # give up (expire) if neither barrier hit within this
+  max_resolve_per_cycle: 80  # cap resolution work per symbol per cycle
+
 llm:
   enabled: false             # true = use Anthropic API for narrative reasoning & reviews
   model: claude-sonnet-4-6

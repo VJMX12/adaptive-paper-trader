@@ -20,38 +20,50 @@ EPS = 1e-9
 # Bump when feature semantics or the learning target change, so a persisted
 # state trained under the old scheme is discarded on load instead of poisoning
 # the new model. v2: direction-oriented features + P(win)-per-direction target.
-MODEL_VERSION = 2
+# v3: EWMA-forgetting normalizer (var replaces Welford m2) + tp/sl-only label
+#     + shadow-label training; old state is incompatible, retrain fresh.
+MODEL_VERSION = 3
 
 
 class OnlineLogistic:
-    def __init__(self, n_features: int, lr: float = 0.03, l2: float = 1e-3):
+    # l2 raised from 1e-3 (audit: effectively a no-op) so the small-sample fit
+    # is actually constrained. decay<1 gives the normalizer FORGETTING, so
+    # z-scoring tracks the current regime instead of freezing on all-time stats.
+    def __init__(self, n_features: int, lr: float = 0.03, l2: float = 2e-2,
+                 decay: float = 0.995):
         self.n = n_features
         self.lr = lr
         self.l2 = l2
+        self.decay = decay
         self.w = np.zeros(n_features)
         self.b = 0.0
-        # running z-score normalization (Welford)
+        # EWMA z-score normalization (exponential forgetting)
         self.count = 0
         self.mean = np.zeros(n_features)
-        self.m2 = np.zeros(n_features)
+        self.var = np.ones(n_features)
         self.n_updates = 0
 
     def _normalize(self, x: np.ndarray, update_stats: bool) -> np.ndarray:
         x = np.asarray(x, dtype=float)
         if update_stats:
             self.count += 1
-            delta = x - self.mean
-            self.mean += delta / self.count
-            self.m2 += delta * (x - self.mean)
+            if self.count == 1:
+                self.mean = x.copy()
+                self.var = np.zeros(self.n)
+            else:
+                # West's EWMA mean/variance recursion
+                diff = x - self.mean
+                incr = (1.0 - self.decay) * diff
+                self.mean = self.mean + incr
+                self.var = self.decay * (self.var + diff * incr)
         if self.count > 1:
-            std = np.sqrt(self.m2 / (self.count - 1))
-            return (x - self.mean) / np.maximum(std, EPS)
+            return (x - self.mean) / np.maximum(np.sqrt(self.var), EPS)
         return x - self.mean
 
     def observe(self, x: np.ndarray) -> None:
-        """Advance z-score stats on EVERY analyzed feature vector, so the
-        normalizer reflects the true feature distribution — not only the
-        selection-biased subset of trades that opened and closed."""
+        """Advance EWMA z-score stats on EVERY analyzed feature vector, so the
+        normalizer reflects the CURRENT feature distribution (forgetting old
+        regimes) — not only the selection-biased subset of closed trades."""
         self._normalize(x, update_stats=True)
 
     def predict_proba(self, x: np.ndarray) -> float:
@@ -78,8 +90,7 @@ class OnlineLogistic:
 
     def snapshot(self, names: list[str]) -> dict:
         """Extractable view of the learned model (weights + norm stats)."""
-        std = (np.sqrt(self.m2 / max(self.count - 1, 1))
-               if self.count > 1 else np.zeros(self.n))
+        std = np.sqrt(np.maximum(self.var, 0.0)) if self.count > 1 else np.zeros(self.n)
         return {
             "n_features": self.n,
             "n_updates": self.n_updates,       # SGD steps = closed trades learned
@@ -98,15 +109,16 @@ class OnlineLogistic:
     def to_dict(self) -> dict:
         return {
             "w": self.w.tolist(), "b": self.b, "count": self.count,
-            "mean": self.mean.tolist(), "m2": self.m2.tolist(),
+            "mean": self.mean.tolist(), "var": self.var.tolist(),
+            "decay": self.decay, "l2": self.l2,
             "n_updates": self.n_updates, "n": self.n,
         }
 
     @classmethod
     def from_dict(cls, d: dict) -> "OnlineLogistic":
-        m = cls(d["n"])
+        m = cls(d["n"], l2=d.get("l2", 2e-2), decay=d.get("decay", 0.995))
         m.w = np.array(d["w"]); m.b = d["b"]; m.count = d["count"]
-        m.mean = np.array(d["mean"]); m.m2 = np.array(d["m2"])
+        m.mean = np.array(d["mean"]); m.var = np.array(d["var"])
         m.n_updates = d.get("n_updates", 0)
         return m
 
@@ -201,7 +213,7 @@ def load_learner_state(path: str | Path, n_features: int):
             return OnlineLogistic(n_features), CalibrationTracker()
         # Reject a corrupted/poisoned state rather than trade on garbage.
         if not (np.all(np.isfinite(model.w)) and np.isfinite(model.b)
-                and np.all(np.isfinite(model.mean)) and np.all(np.isfinite(model.m2))):
+                and np.all(np.isfinite(model.mean)) and np.all(np.isfinite(model.var))):
             return OnlineLogistic(n_features), CalibrationTracker()
         return model, CalibrationTracker.from_dict(d["calibration"])
     except Exception:

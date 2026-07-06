@@ -304,6 +304,7 @@ function renderOutcomes(tr){
 function renderLearner(L){
   const m=(L&&L.model)||{}, c=(L&&L.calibration)||{};
   if(!m.n_updates && m.n_updates!==0){ $("#learner").innerHTML=`<div class="empty">learner state unavailable</div>`; return; }
+  const sh = (L&&L.shadow)||{};
   const brier = c.brier, cscore = c.calibration_score;
   const brierTxt = brier==null? "warming up (<5 closed)" : brier.toFixed(3);
   const brierCls = brier==null? "" : (brier<0.25?"pos":(brier>0.30?"neg":"wrn"));
@@ -322,7 +323,8 @@ function renderLearner(L){
     </div>`;}).join("");
   $("#learner").innerHTML =
     `<div style="display:flex;gap:18px;flex-wrap:wrap;margin-bottom:8px">
-       <div><span style="color:var(--ink3);font-size:10px">LEARNING STEPS</span><div style="font-size:22px;font-weight:700">${m.n_updates}</div><div class="s" style="color:var(--ink3);font-size:10px">closed trades learned</div></div>
+       <div><span style="color:var(--ink3);font-size:10px">LEARNING STEPS</span><div style="font-size:22px;font-weight:700">${m.n_updates}</div><div class="s" style="color:var(--ink3);font-size:10px">trades + shadow labels</div></div>
+       <div><span style="color:var(--ink3);font-size:10px">SHADOW LABELS</span><div style="font-size:22px;font-weight:700">${sh.resolved!=null?sh.resolved:"—"}</div><div class="s" style="color:var(--ink3);font-size:10px">resolved${sh.open!=null?" · "+sh.open+" open":""}${sh.resolved_win_rate!=null?" · "+pct(sh.resolved_win_rate)+" tp":""}</div></div>
        <div><span style="color:var(--ink3);font-size:10px">BRIER (rolling)</span><div class="${brierCls}" style="font-size:22px;font-weight:700">${brierTxt}</div><div class="s" style="color:var(--ink3);font-size:10px">lower = honest; 0.25 = coin-flip</div></div>
        <div><span style="color:var(--ink3);font-size:10px">CALIB. SCORE</span><div style="font-size:22px;font-weight:700">${cscore!=null?cscore.toFixed(2):"—"}</div><div class="s" style="color:var(--ink3);font-size:10px">1 = honest, 0 = poor</div></div>
      </div>

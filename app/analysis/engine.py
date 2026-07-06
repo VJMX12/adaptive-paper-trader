@@ -48,6 +48,12 @@ class AnalysisResult:
     invalidation: str = ""
     sigma_per_candle: float = 0.0
     candles_per_year: float = 0.0
+    # shadow setup: the model's preferred direction + barrier geometry, ALWAYS
+    # populated (even when no trade is recommended) so it can be resolved
+    # against the forward price path for extra training labels.
+    shadow_direction: str | None = None
+    shadow_stop: float | None = None
+    shadow_take_profit: float | None = None
 
 
 class AnalysisEngine:
@@ -115,8 +121,11 @@ class AnalysisEngine:
         short-oriented features — never as 1 - P(long). Direction is chosen by
         whichever side has the higher P(win), with a drift prior for cold start.
         """
-        # feed the normalizer on every analysis (unbiased feature distribution)
-        self.model.observe(fv.as_array())
+        # feed BOTH orientations to the normalizer so the long/short mirror is
+        # exact: directional-feature means cancel to ~0, so a short is scored as
+        # the true mirror of a long (not offset by 2*mean/std).
+        self.model.observe(fv.oriented("long"))
+        self.model.observe(fv.oriented("short"))
 
         drift = 0.0
         if hmm.fitted:
@@ -131,8 +140,9 @@ class AnalysisEngine:
 
         # Cold-start: an untrained learner says ~0.50 for both, so hand the
         # direction to the drift belief and keep confidence modest (a bounded
-        # prior that fades out as real outcomes accumulate).
-        w = min(1.0, self.model.n_updates / 40.0)
+        # prior that fades out as real outcomes accumulate). Handover at 150
+        # updates (~9 samples/feature) — 40 trusted a barely-seen model too soon.
+        w = min(1.0, self.model.n_updates / 150.0)
         prior_mag = 0.20 * float(np.tanh(abs(score)))     # <=0.20 -> caps prior at 0.70
         favored = "long" if score >= 0 else "short"
         p_long_b = w * p_long + (1 - w) * (0.5 + (prior_mag if favored == "long" else -prior_mag))
@@ -200,17 +210,31 @@ class AnalysisEngine:
             key_factors=self.model.contributions(fv.as_array(), FeatureVector.names()),
             invalidation=invalidation,
             sigma_per_candle=fv.sigma, candles_per_year=self.candles_per_year,
+            shadow_direction=direction, shadow_stop=stop, shadow_take_profit=tp,
         )
 
     # ---------- learning ----------
     def learn_from_trade(self, entry_features: dict, direction: str, won: bool,
-                         stated_confidence: float) -> None:
+                         stated_confidence: float, exit_reason: str | None = None) -> None:
         """Update learner + calibration after a closed trade.
 
-        Single coherent target: on features ORIENTED to the trade's direction,
-        y=1 iff the trade won. A long and a short that both won are the same
-        'favorable setup -> win' example — no long/short target mixing.
+        Target = P(TP before SL): only tp/sl exits are a clean barrier outcome.
+        time_exit is near-flat label-noise and changepoint/regime exits fire on
+        a different condition, so they DON'T train the P(win) head (they'd teach
+        the model the wrong event). Calibration only records clean outcomes too,
+        so its Brier measures the same event the confidence predicts.
         """
+        if exit_reason is not None and exit_reason not in ("tp", "sl"):
+            return
         fv = FeatureVector(**{n: float(entry_features[n]) for n in FeatureVector.names()})
         self.model.update(fv.oriented(direction), int(won))
         self.calibration.record(stated_confidence, int(won))
+
+    def learn_from_shadow(self, entry_features: dict, direction: str,
+                          won: bool) -> None:
+        """Train on a SHADOW label: a recommended setup resolved against the
+        forward price path (TP-before-SL) even though no live trade opened.
+        Model weights only (not calibration — no stated confidence was acted
+        on). This multiplies training signal far beyond actual fills."""
+        fv = FeatureVector(**{n: float(entry_features[n]) for n in FeatureVector.names()})
+        self.model.update(fv.oriented(direction), int(won))
