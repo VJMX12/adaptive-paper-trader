@@ -87,3 +87,32 @@ def test_changepoint_collapses_exposure():
     alarm = rm.size_position(**base, cp_prob=0.40)
     assert calm.allowed
     assert (not alarm.allowed) or alarm.risk_amount < 0.2 * calm.risk_amount
+
+
+def test_nan_multiplier_blocks_sizing():
+    # A NaN reaching the multipliers must NOT produce a NaN position size
+    # that slips past the caps into the executor.
+    rm = RiskManager(make_cfg())
+    d = rm.size_position(
+        equity=10000, peak_equity=10000, pnl_today=0, open_positions=0,
+        entry=100.0, stop=99.0, confidence=float("nan"), min_confidence=0.6,
+        sigma_per_candle=0.01, candles_per_year=105120, cp_prob=0.0)
+    assert d.allowed is False
+    assert d.position_size == 0.0
+
+
+def test_learner_state_rejects_non_finite(tmp_path):
+    from app.analysis.model import save_learner_state, load_learner_state
+    m = OnlineLogistic(n_features=4)
+    m.w = np.array([float("nan"), 0.0, 0.0, 0.0])
+    p = tmp_path / "state.json"
+    # save must refuse to persist non-finite weights
+    import pytest
+    with pytest.raises(ValueError):
+        save_learner_state(p, m, CalibrationTracker())
+    # and if a poisoned file exists, load resets to a fresh model
+    p.write_text('{"model": {"w": [NaN,0,0,0], "b": 0, "count": 0, '
+                 '"mean": [0,0,0,0], "m2": [0,0,0,0], "n_updates": 0, "n": 4}, '
+                 '"calibration": {"window": 60, "records": []}}')
+    model, _ = load_learner_state(p, 4)
+    assert bool(np.all(np.isfinite(model.w)))

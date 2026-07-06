@@ -99,9 +99,14 @@ class RiskManager:
         # (kelly_fraction*4 keeps risk == base_risk_pct at kelly_fraction=0.25, full multipliers)
         risk_amount = min(risk_amount, equity * 0.02)  # absolute per-trade cap
 
+        # Hard finite-guard: np.clip does NOT sanitize NaN, so a single NaN
+        # multiplier would slip through the "too small" check below and reach
+        # the executor as a NaN size. Refuse anything non-finite outright.
+        size = risk_amount / stop_dist if stop_dist > 0 else float("nan")
+        if not (np.isfinite(risk_amount) and np.isfinite(size)):
+            return SizingDecision(False, "non-finite size/risk", multipliers=mult)
         if risk_amount < equity * 0.0005:
             return SizingDecision(False, f"risk too small after multipliers {mult}",
                                   multipliers=mult)
-        size = risk_amount / stop_dist
         return SizingDecision(True, "ok", position_size=size,
                               risk_amount=risk_amount, multipliers=mult)

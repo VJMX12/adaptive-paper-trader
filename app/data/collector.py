@@ -1,8 +1,8 @@
 """Read-only market data collection via ccxt (async).
 
-This module NEVER creates orders. No API keys are passed to the exchange:
-only public endpoints (OHLCV, ticker, order book) are used, which makes
-live trading impossible by construction.
+This module never creates orders and passes no API keys — only public
+endpoints (OHLCV, ticker, order book). Order execution lives in a separate,
+gated layer (app/trading/executor.py); this collector stays read-only.
 """
 from __future__ import annotations
 

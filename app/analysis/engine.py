@@ -145,7 +145,9 @@ class AnalysisEngine:
         rr = tp_dist / stop_dist if stop_dist > 0 else 0.0
 
         veto: list[str] = []
-        if shrunk < self.min_conf:
+        if not np.isfinite(shrunk):
+            veto.append("non-finite confidence")
+        elif shrunk < self.min_conf:
             veto.append(f"confidence {shrunk:.2f} < {self.min_conf:.2f}")
         if cp_prob >= self.cp_alert:
             veto.append(f"changepoint alarm {cp_prob:.2f} >= {self.cp_alert:.2f}")

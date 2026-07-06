@@ -121,7 +121,13 @@ class App:
                             res, reasoning, retrieval)
                         if trade_id:
                             t = await self.db.get_trade(trade_id)
-                            await self.executor.open_position(t)
+                            try:
+                                await self.executor.open_position(t)
+                            except Exception as e:
+                                log.error("live_open_failed", trade_id=trade_id,
+                                          symbol=symbol, error=str(e),
+                                          hint="paper trade opened but live order "
+                                               "failed — positions may be desynced")
                             await self.tg.trade_opened(
                                 trade_id, res, t["position_size"],
                                 t["risk_amount"], reasoning)
@@ -145,13 +151,28 @@ class App:
 
     async def _handle_closed_trade(self, trade: dict) -> None:
         import json as _json
-        await self.executor.close_position(trade)
         won = (trade.get("pnl_usd") or 0) > 0
-        feats = _json.loads(trade["features"])
-        # 1) learning updates (model + calibration), persisted
-        self.engine.learn_from_trade(
-            feats, trade["direction"], won, float(trade["confidence"]))
-        save_learner_state(LEARNER_STATE_PATH, self.model, self.calibration)
+        # 1) learning updates FIRST — the paper trade is already terminally
+        #    closed, so if we let the (fallible) live close run first and it
+        #    raised, this outcome would be lost from the model forever.
+        try:
+            feats = _json.loads(trade["features"])
+            self.engine.learn_from_trade(
+                feats, trade["direction"], won, float(trade["confidence"]))
+            save_learner_state(LEARNER_STATE_PATH, self.model, self.calibration)
+        except Exception as e:
+            log.error("learning_update_failed", trade_id=trade.get("id"),
+                      error=str(e))
+        # 2) mirror the close on the exchange; isolate failures so one bad
+        #    close can't abort the loop. A raised close still leaves the real
+        #    position protected by its exchange-side SL/TP (swap).
+        try:
+            await self.executor.close_position(trade)
+        except Exception as e:
+            log.error("live_close_failed", trade_id=trade.get("id"),
+                      symbol=trade.get("symbol"), error=str(e),
+                      hint="real position may remain open — guarded by "
+                           "exchange SL/TP; manual check advised")
         # 2) journal review
         review, lessons, _ = await write_review(
             self.cfg, self.db, trade, self.calibration.calibration_score())

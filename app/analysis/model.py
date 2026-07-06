@@ -139,9 +139,11 @@ class CalibrationTracker:
 
 def save_learner_state(path: str | Path, model: OnlineLogistic, cal: CalibrationTracker) -> None:
     Path(path).parent.mkdir(parents=True, exist_ok=True)
+    # allow_nan=False: refuse to persist NaN/Inf weights. A non-finite weight
+    # would otherwise reload verbatim and poison sizing permanently (sticky).
     Path(path).write_text(json.dumps({
         "model": model.to_dict(), "calibration": cal.to_dict(),
-    }))
+    }, allow_nan=False))
 
 
 def load_learner_state(path: str | Path, n_features: int):
@@ -152,6 +154,10 @@ def load_learner_state(path: str | Path, n_features: int):
         d = json.loads(p.read_text())
         model = OnlineLogistic.from_dict(d["model"])
         if model.n != n_features:  # feature schema changed -> start fresh
+            return OnlineLogistic(n_features), CalibrationTracker()
+        # Reject a corrupted/poisoned state rather than trade on garbage.
+        if not (np.all(np.isfinite(model.w)) and np.isfinite(model.b)
+                and np.all(np.isfinite(model.mean)) and np.all(np.isfinite(model.m2))):
             return OnlineLogistic(n_features), CalibrationTracker()
         return model, CalibrationTracker.from_dict(d["calibration"])
     except Exception:
