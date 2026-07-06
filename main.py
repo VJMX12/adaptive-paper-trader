@@ -203,6 +203,10 @@ class App:
             runner = await start_dashboard(
                 self.db, self.risk.starting_equity,
                 self.cfg.get("dashboard.host", "0.0.0.0"), port,
+                learner_provider=lambda: {
+                    "model": self.model.snapshot(FeatureVector.names()),
+                    "calibration": self.calibration.snapshot(),
+                },
                 info={
                     "mode": mode,
                     "live": self.executor.live,

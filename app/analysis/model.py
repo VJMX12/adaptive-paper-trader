@@ -64,6 +64,24 @@ class OnlineLogistic:
         order = np.argsort(-np.abs(contrib))[:top]
         return [(names[i], float(contrib[i])) for i in order]
 
+    def snapshot(self, names: list[str]) -> dict:
+        """Extractable view of the learned model (weights + norm stats)."""
+        std = (np.sqrt(self.m2 / max(self.count - 1, 1))
+               if self.count > 1 else np.zeros(self.n))
+        return {
+            "n_features": self.n,
+            "n_updates": self.n_updates,       # SGD steps = closed trades learned
+            "samples_seen": self.count,        # feature vectors normalized
+            "bias": round(float(self.b), 6),
+            "lr": self.lr, "l2": self.l2,
+            "weights": [
+                {"feature": names[i], "weight": round(float(self.w[i]), 6),
+                 "mean": round(float(self.mean[i]), 6),
+                 "std": round(float(std[i]), 6)}
+                for i in range(self.n)
+            ],
+        }
+
     # ---------- persistence ----------
     def to_dict(self) -> dict:
         return {
@@ -125,6 +143,17 @@ class CalibrationTracker:
                     "actual_win_rate": float(arr[mask, 1].mean()),
                 })
         return out
+
+    def snapshot(self) -> dict:
+        """Extractable view of calibration quality."""
+        return {
+            "window": self.window,
+            "n_records": len(self.records),
+            "brier": (round(self.brier(), 4) if self.brier() is not None else None),
+            "calibration_score": round(self.calibration_score(), 4),
+            "reliability_buckets": self.reliability_buckets(),
+            "records": [[round(p, 4), y] for p, y in self.records],
+        }
 
     def to_dict(self) -> dict:
         return {"window": self.window, "records": list(self.records)}

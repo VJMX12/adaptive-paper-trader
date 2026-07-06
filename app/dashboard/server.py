@@ -17,7 +17,9 @@ dashboard is open (a warning is logged at startup).
 from __future__ import annotations
 
 import base64
+import csv
 import hmac
+import io
 import json
 import os
 from pathlib import Path
@@ -96,7 +98,7 @@ async def _security_mw(request, handler):
 
 
 def build_app(db: Database, starting_equity: float,
-              info: dict | None = None) -> web.Application:
+              info: dict | None = None, learner_provider=None) -> web.Application:
     app = web.Application(middlewares=[_security_mw])
     info = info or {}
 
@@ -128,23 +130,45 @@ def build_app(db: Database, starting_equity: float,
     async def equity(_req):
         return web.json_response(await db.equity_curve(), dumps=_dumps)
 
+    async def learner(_req):
+        """Extractable learning state: model weights + calibration quality."""
+        snap = learner_provider() if learner_provider else {}
+        return web.json_response(snap, dumps=_dumps)
+
+    async def trades_csv(_req):
+        """Full closed-trade history as CSV for offline analysis."""
+        rows = await db.get_closed_trades(limit=100000)
+        buf = io.StringIO()
+        if rows:
+            cols = list(rows[0].keys())
+            w = csv.DictWriter(buf, fieldnames=cols, extrasaction="ignore")
+            w.writeheader()
+            for r in rows:
+                w.writerow(r)
+        return web.Response(
+            text=buf.getvalue(), content_type="text/csv",
+            headers={"Content-Disposition": 'attachment; filename="trades.csv"'})
+
     app.router.add_get("/", index)
     app.router.add_get("/metrics", metrics)
     app.router.add_get("/positions", positions)
     app.router.add_get("/trades", trades)
     app.router.add_get("/analyses", analyses)
     app.router.add_get("/equity", equity)
+    app.router.add_get("/learner", learner)
+    app.router.add_get("/export/trades.csv", trades_csv)
     return app
 
 
 async def start_dashboard(db: Database, starting_equity: float,
                           host: str, port: int,
-                          info: dict | None = None) -> web.AppRunner:
+                          info: dict | None = None,
+                          learner_provider=None) -> web.AppRunner:
     if not os.getenv("DASHBOARD_PASS"):
         log.warning("dashboard_open",
                     hint="no DASHBOARD_PASS set — dashboard is publicly "
                          "readable. Set DASHBOARD_PASS to require Basic Auth.")
-    app = build_app(db, starting_equity, info)
+    app = build_app(db, starting_equity, info, learner_provider)
     runner = web.AppRunner(app)
     await runner.setup()
     site = web.TCPSite(runner, host, port)

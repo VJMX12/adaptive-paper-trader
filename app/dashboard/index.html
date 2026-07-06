@@ -92,13 +92,24 @@ footer{margin-top:14px;color:var(--ink3);font-size:11px;display:flex;gap:14px;fl
   </div>
 </div>
 
+<div class="grid cols" style="margin-top:12px">
+  <div class="card">
+    <h2>Trade outcomes — win / loss</h2>
+    <div id="outcomes"><div class="empty">no closed trades yet</div></div>
+  </div>
+  <div class="card">
+    <h2>Learner health — is the model actually learning?</h2>
+    <div id="learner"><div class="empty">loading learner state…</div></div>
+  </div>
+</div>
+
 <div class="card" style="margin-top:12px">
   <h2>Analysis feed — regime · confidence · changepoint</h2>
   <div class="scroll" id="analyses"><div class="empty">waiting for first analysis cycle…</div></div>
 </div>
 
 <footer>
-  <span>raw: <a href="/metrics">/metrics</a> · <a href="/trades">/trades</a> · <a href="/positions">/positions</a> · <a href="/analyses">/analyses</a> · <a href="/equity">/equity</a></span>
+  <span>raw: <a href="/metrics">/metrics</a> · <a href="/trades">/trades</a> · <a href="/positions">/positions</a> · <a href="/analyses">/analyses</a> · <a href="/equity">/equity</a> · <a href="/learner">/learner</a> · <a href="/export/trades.csv">/export/trades.csv</a></span>
   <span id="foot"></span>
 </footer>
 
@@ -251,15 +262,80 @@ function renderChips(symbols){
   document.querySelectorAll(".chip").forEach(ch=>ch.onclick=()=>{SYM=ch.dataset.s; tick();});
 }
 
+function renderOutcomes(tr){
+  tr = tr.filter(fsym);
+  const closed = tr.filter(t=>t.exit_reason!=null);
+  if(!closed.length){ $("#outcomes").innerHTML=`<div class="empty">no closed trades yet — download <a href="/export/trades.csv">trades.csv</a></div>`; return; }
+  const wins = closed.filter(t=>(t.pnl_usd||0)>0).length, losses = closed.length-wins;
+  const wr = wins/closed.length;
+  const grossW = closed.filter(t=>t.pnl_usd>0).reduce((a,t)=>a+t.pnl_usd,0);
+  const grossL = Math.abs(closed.filter(t=>t.pnl_usd<=0).reduce((a,t)=>a+t.pnl_usd,0));
+  // win/loss split bar (status colors, with counts labelled — never color alone)
+  const wpct = Math.round(wr*100);
+  const bar = `<div style="display:flex;height:26px;border-radius:6px;overflow:hidden;background:var(--panel2);margin:4px 0 10px">
+    ${wins?`<div style="width:${wr*100}%;background:var(--good);display:flex;align-items:center;justify-content:center;font-size:11px;color:#031;min-width:${wins?28:0}px">${wins} W</div>`:""}
+    ${losses?`<div style="width:${(1-wr)*100}%;background:var(--bad);display:flex;align-items:center;justify-content:center;font-size:11px;color:#310">${losses} L</div>`:""}
+  </div>`;
+  // R-multiple streak strip (newest right), green=win red=loss, height ∝ |R|
+  const rs = closed.slice().reverse();
+  const maxR = Math.max(1, ...rs.map(t=>Math.abs(t.r_multiple||0)));
+  const strip = `<div style="display:flex;gap:2px;align-items:flex-end;height:46px;margin-top:6px">`+
+    rs.map(t=>{const r=t.r_multiple||0, h=Math.max(4,Math.abs(r)/maxR*44);
+      return `<div title="#${num(t.id,0)} ${esc(shortSym(t.symbol))} ${num(r)}R" style="flex:1;min-width:3px;height:${h}px;background:${r>0?"var(--good)":"var(--bad)"};border-radius:2px"></div>`;}).join("")+`</div>
+    <div style="color:var(--ink3);font-size:10px;margin-top:2px">${rs.length} closed trades (oldest → newest), bar height = |R|</div>`;
+  // exit-reason tally
+  const byReason={}; closed.forEach(t=>{const k=t.exit_reason||"?"; byReason[k]=(byReason[k]||0)+1;});
+  const reasons = Object.entries(byReason).sort((a,b)=>b[1]-a[1])
+    .map(([k,v])=>`<span class="chip">${esc(k)} · ${v}</span>`).join(" ");
+  $("#outcomes").innerHTML =
+    `<div style="display:flex;gap:16px;flex-wrap:wrap;margin-bottom:6px">
+       <div><span class="tile-k" style="color:var(--ink3);font-size:10px">WIN RATE</span><div style="font-size:22px;font-weight:700">${wpct}%</div></div>
+       <div><span style="color:var(--ink3);font-size:10px">PROFIT FACTOR</span><div style="font-size:22px;font-weight:700">${grossL>0?(grossW/grossL).toFixed(2):"—"}</div></div>
+       <div><span style="color:var(--ink3);font-size:10px">GROSS W / L</span><div style="font-size:15px;margin-top:5px"><span class="pos">${usd(grossW)}</span> / <span class="neg">${usd(grossL)}</span></div></div>
+     </div>${bar}<div class="chips" style="margin:0 0 4px">${reasons}</div>${strip}
+     <div style="margin-top:8px;font-size:11px"><a href="/export/trades.csv">⤓ download trades.csv</a> · <a href="/learner">learner JSON</a></div>`;
+}
+
+function renderLearner(L){
+  const m=(L&&L.model)||{}, c=(L&&L.calibration)||{};
+  if(!m.n_updates && m.n_updates!==0){ $("#learner").innerHTML=`<div class="empty">learner state unavailable</div>`; return; }
+  const brier = c.brier, cscore = c.calibration_score;
+  const brierTxt = brier==null? "warming up (<5 closed)" : brier.toFixed(3);
+  const brierCls = brier==null? "" : (brier<0.25?"pos":(brier>0.30?"neg":"wrn"));
+  // top feature weights, diverging: + pushes long-favorable, − short-favorable
+  const ws=(m.weights||[]).slice().sort((a,b)=>Math.abs(b.weight)-Math.abs(a.weight)).slice(0,8);
+  const maxW=Math.max(1e-6,...ws.map(w=>Math.abs(w.weight)));
+  const rows = ws.map(w=>{const p=w.weight>=0, mag=Math.abs(w.weight)/maxW*100;
+    return `<div style="display:flex;align-items:center;gap:8px;margin:3px 0;font-size:11.5px">
+      <div style="width:88px;text-align:right;color:var(--ink2)">${esc(w.feature)}</div>
+      <div style="flex:1;display:flex;align-items:center">
+        <div style="flex:1;display:flex;justify-content:flex-end"><div style="width:${p?0:mag}%;height:9px;background:var(--bad);border-radius:2px"></div></div>
+        <div style="width:1px;height:14px;background:var(--line)"></div>
+        <div style="flex:1"><div style="width:${p?mag:0}%;height:9px;background:var(--accent);border-radius:2px"></div></div>
+      </div>
+      <div style="width:58px;font-variant-numeric:tabular-nums;color:${p?"var(--accent)":"var(--bad)"}">${w.weight>=0?"+":""}${w.weight.toFixed(4)}</div>
+    </div>`;}).join("");
+  $("#learner").innerHTML =
+    `<div style="display:flex;gap:18px;flex-wrap:wrap;margin-bottom:8px">
+       <div><span style="color:var(--ink3);font-size:10px">LEARNING STEPS</span><div style="font-size:22px;font-weight:700">${m.n_updates}</div><div class="s" style="color:var(--ink3);font-size:10px">closed trades learned</div></div>
+       <div><span style="color:var(--ink3);font-size:10px">BRIER (rolling)</span><div class="${brierCls}" style="font-size:22px;font-weight:700">${brierTxt}</div><div class="s" style="color:var(--ink3);font-size:10px">lower = honest; 0.25 = coin-flip</div></div>
+       <div><span style="color:var(--ink3);font-size:10px">CALIB. SCORE</span><div style="font-size:22px;font-weight:700">${cscore!=null?cscore.toFixed(2):"—"}</div><div class="s" style="color:var(--ink3);font-size:10px">1 = honest, 0 = poor</div></div>
+     </div>
+     <div style="color:var(--ink2);font-size:11px;margin-bottom:4px">Top learned feature weights — <span style="color:var(--accent)">▮ favors long</span> · <span style="color:var(--bad)">▮ favors short</span> (all ≈0 until it has learned)</div>
+     ${rows||'<div class="empty">weights still at zero — no learning yet</div>'}
+     <div style="margin-top:8px;font-size:11px"><a href="/learner">⤓ full learner JSON</a></div>`;
+}
+
 async function tick(){
   try{
-    const [m,pos,tr,an,eq] = await Promise.all(
-      ["/metrics","/positions","/trades?limit=60","/analyses?limit=250","/equity"]
+    const [m,pos,tr,an,eq,L] = await Promise.all(
+      ["/metrics","/positions","/trades?limit=500","/analyses?limit=250","/equity","/learner"]
       .map(u=>fetch(u).then(r=>r.json())));
     CURVE=eq;
     renderSys(m); renderTiles(m); renderChart();
     renderChips((m.system||{}).symbols);
     renderPositions(pos); renderTrades(tr);
+    renderOutcomes(tr); renderLearner(L);
     renderAnalyses(an,(m.system||{}).min_confidence ?? .6);
     $("#sync").textContent = new Date().toLocaleTimeString();
   }catch(e){ $("#sync").textContent = "offline?"; }
