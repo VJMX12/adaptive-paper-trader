@@ -157,14 +157,20 @@ def build_app(db: Database, starting_equity: float,
         return web.json_response(await db.equity_curve(), dumps=_dumps)
 
     async def live(_req):
-        """Cheap per-second payload (no metrics scan): equity, open, positions.
+        """Cheap per-second payload (no metrics scan): equity, open, positions,
+        + a shadow-labeling heartbeat so the training signal is visibly moving.
         Polled every 1s by the client for lag-free liveness through any proxy."""
-        return web.json_response({
+        payload = {
             "open": await db.open_positions_count(),
             "equity": await db.latest_equity(starting_equity),
             "positions": [{k: r.get(k) for k in _TRADE_COLS}
                           for r in await db.get_open_trades()],
-        }, dumps=_dumps)
+        }
+        try:
+            payload["shadow"] = await db.shadow_counts()
+        except Exception:
+            pass
+        return web.json_response(payload, dumps=_dumps)
 
     async def learner(_req):
         """Extractable learning state: model weights + calibration + shadow."""

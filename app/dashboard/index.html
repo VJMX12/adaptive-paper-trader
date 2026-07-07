@@ -104,6 +104,11 @@ footer{margin-top:14px;color:var(--ink3);font-size:11px;display:flex;gap:14px;fl
 </div>
 
 <div class="card" style="margin-top:12px">
+  <h2>Shadow labeling — live training signal <span id="shadowbeat" style="color:var(--good);opacity:0.25;transition:opacity .4s">●</span></h2>
+  <div id="shadow"><div class="empty">waiting for shadow labels…</div></div>
+</div>
+
+<div class="card" style="margin-top:12px">
   <h2>Edge validation — walk-forward (out-of-sample)</h2>
   <div id="validation"><div class="empty">loading validation…</div></div>
 </div>
@@ -334,10 +339,58 @@ function renderLearner(L){
 }
 
 // -------- live state, updated by the SSE stream (server push, per second) --------
-const STATE = {metrics:null, positions:[], trades:[], analyses:[], learner:null};
+const STATE = {metrics:null, positions:[], trades:[], analyses:[], learner:null, shadow:null};
+let SHADOW_HIST = [];       // ring buffer of {t, r} for rate + sparkline
+let _lastResolved = null;
+
+function pushShadow(sh){
+  if(!sh || sh.resolved==null) return;
+  const now = Date.now();
+  SHADOW_HIST.push({t: now, r: sh.resolved});
+  if(SHADOW_HIST.length > 240) SHADOW_HIST.shift();  // ~4 min at 1s
+  const beat = $("#shadowbeat");
+  if(beat && _lastResolved!=null && sh.resolved > _lastResolved){
+    beat.style.opacity = "1";
+    setTimeout(()=>{ if(beat) beat.style.opacity="0.25"; }, 400);
+  }
+  _lastResolved = sh.resolved;
+}
+
+function renderShadow(){
+  const sh = STATE.shadow; if(!sh){ return; }
+  // rate labels/min from the ring buffer
+  let rate = null;
+  if(SHADOW_HIST.length >= 2){
+    const a = SHADOW_HIST[0], b = SHADOW_HIST[SHADOW_HIST.length-1];
+    const mins = (b.t - a.t)/60000;
+    if(mins > 0.05) rate = (b.r - a.r)/mins;
+  }
+  // sparkline of resolved-over-time (cumulative, last buffer)
+  let spark = "";
+  if(SHADOW_HIST.length >= 2){
+    const W=560,H=40, rs=SHADOW_HIST.map(x=>x.r), lo=Math.min(...rs), hi=Math.max(...rs);
+    const n=SHADOW_HIST.length;
+    const pts=SHADOW_HIST.map((x,i)=>`${(i/(n-1)*W).toFixed(1)},${(H-2-(hi-lo?(x.r-lo)/(hi-lo):0)*(H-4)).toFixed(1)}`);
+    spark=`<svg viewBox="0 0 ${W} ${H}" width="100%" height="${H}" preserveAspectRatio="none" style="margin-top:6px">
+      <polyline points="${pts.join(" ")}" fill="none" stroke="#3987e5" stroke-width="2"/></svg>
+      <div style="color:var(--ink3);font-size:10px">cumulative resolved labels (last ${Math.round((SHADOW_HIST[n-1].t-SHADOW_HIST[0].t)/1000)}s)</div>`;
+  }
+  const wr = sh.resolved_win_rate;
+  const wrCls = wr==null? "" : (wr>0.35?"pos":(wr<0.33?"neg":"wrn"));
+  const stat=(k,v,cls="",s="")=>`<div><span style="color:var(--ink3);font-size:10px">${k}</span><div class="${cls}" style="font-size:22px;font-weight:700">${v}</div>${s?`<div class="s" style="color:var(--ink3);font-size:10px">${s}</div>`:""}</div>`;
+  $("#shadow").innerHTML =
+    `<div style="display:flex;gap:20px;flex-wrap:wrap;margin-bottom:4px">
+       ${stat("RESOLVED", (sh.resolved!=null?sh.resolved.toLocaleString():"—"), "", "labels trained")}
+       ${stat("RATE", rate!=null?("+"+rate.toFixed(1)+"/min"):"…", "pos", "resolving now")}
+       ${stat("OPEN", sh.open!=null?sh.open.toLocaleString():"—", "", "awaiting price path")}
+       ${stat("TP-FIRST RATE", wr!=null?pct(wr):"—", wrCls, "break-even ≈ 33% @ 2:1")}
+       ${stat("EXPIRED", sh.expired!=null?sh.expired:"—", "", "no barrier in 48h")}
+     </div>${spark}
+     <div style="margin-top:6px;font-size:11px;color:var(--ink2)">Every analysis logs the model's preferred setup; each is resolved against the forward price path (TP-before-SL) to train the learner — far beyond the rare live fills.</div>`;
+}
 
 function renderLight(){
-  // cheap per-second updates: equity hero, open count, clock, positions
+  // cheap per-second updates: equity hero, open count, clock, positions, shadow
   const m = STATE.metrics;
   if(m){
     const d = STATE.equity - m.starting_equity;
@@ -349,6 +402,7 @@ function renderLight(){
     }
   }
   renderPositions(STATE.positions);
+  renderShadow();
   $("#sync").textContent = new Date().toLocaleTimeString();
 }
 
@@ -365,6 +419,7 @@ function renderHeavy(){
 function applyPayload(p){
   if("equity" in p) STATE.equity = p.equity;
   if(p.positions) STATE.positions = p.positions;
+  if(p.shadow){ STATE.shadow = p.shadow; pushShadow(p.shadow); }
   let heavy = false;
   if(p.metrics){ STATE.metrics = p.metrics; heavy = true; }
   if(p.trades) STATE.trades = p.trades;

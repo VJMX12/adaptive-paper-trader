@@ -198,6 +198,7 @@ class App:
             self._shadow_since_save += learned
             if self._shadow_since_save >= 20:   # persist learner periodically
                 save_learner_state(LEARNER_STATE_PATH, self.model, self.calibration)
+                await self.db.prune_shadow_setups()  # keep the table bounded
                 self._shadow_since_save = 0
             log.info("shadow_resolved", symbol=sym, learned=learned)
 

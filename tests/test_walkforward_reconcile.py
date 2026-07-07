@@ -138,3 +138,19 @@ def test_ewma_normalizer_forgets():
     for _ in range(50):
         m.observe(np.array([10.0, 10.0]))
     assert m.mean[0] > 5.0   # a frozen Welford mean would still be ~0
+
+
+async def test_shadow_prune_keeps_recent(tmp_path):
+    db = Database(str(tmp_path / "p.db")); await db.connect()
+    for i in range(30):
+        await db.record_shadow_setup({
+            "symbol": "BTC/USDT:USDT", "direction": "long", "entry_price": 100.0,
+            "entry_ms": 1000 + i, "stop_loss": 98.0, "take_profit": 104.0,
+            "features": {"ret_1": 0.0}})
+    # resolve all, then prune to keep 10
+    for r in await db.open_shadow_setups("BTC/USDT:USDT", 100):
+        await db.resolve_shadow_setup(r["id"], 1, 1)
+    deleted = await db.prune_shadow_setups(keep=10)
+    assert deleted == 20
+    assert (await db.shadow_counts())["resolved"] == 10
+    await db.close()

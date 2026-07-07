@@ -366,6 +366,16 @@ class Database:
             (resolved, outcome, sid))
         await self.db.commit()
 
+    async def prune_shadow_setups(self, keep: int = 50000) -> int:
+        """Cap the resolved/expired shadow rows (already learned from) so the
+        table — and the per-second count query — stays bounded. Returns deleted."""
+        cur = await self.db.execute(
+            "DELETE FROM shadow_setups WHERE resolved != 0 AND id NOT IN "
+            "(SELECT id FROM shadow_setups WHERE resolved != 0 "
+            " ORDER BY id DESC LIMIT ?)", (keep,))
+        await self.db.commit()
+        return cur.rowcount or 0
+
     async def shadow_counts(self) -> dict:
         cur = await self.db.execute(
             "SELECT resolved, COUNT(*) c, COALESCE(SUM(outcome),0) wins "
