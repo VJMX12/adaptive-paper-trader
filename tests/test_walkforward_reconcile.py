@@ -156,6 +156,53 @@ async def test_shadow_prune_keeps_recent(tmp_path):
     await db.close()
 
 
+def test_resolve_barrier_no_lookahead():
+    # entry at ts=100. A TP touch BEFORE/AT entry must be IGNORED (no leak);
+    # only strictly-forward candles count.
+    from app.analysis.walkforward import resolve_barrier
+    ts = np.array([90.0, 100.0, 110.0, 120.0])
+    # long: tp=105, sl=95. Pre-entry candle (ts=90) spikes high to 999 (would be
+    # a TP) and low to 1 (would be an SL) — both must be ignored.
+    high = np.array([999.0, 999.0, 106.0, 100.0])
+    low = np.array([1.0, 1.0, 100.0, 100.0])
+    # forward candles: ts=110 high 106>=105 -> TP first, no SL touch forward
+    assert resolve_barrier(100.0, "long", 95.0, 105.0, ts, high, low) == 1
+
+
+def test_resolve_barrier_tp_and_sl_first():
+    from app.analysis.walkforward import resolve_barrier
+    ts = np.array([0.0, 1.0, 2.0, 3.0])
+    # long tp=110 sl=90. SL (idx1 low 89) before TP (idx2 high 111) -> loss
+    hi = np.array([100.0, 100.0, 111.0, 100.0])
+    lo = np.array([100.0, 89.0, 100.0, 100.0])
+    assert resolve_barrier(-1.0, "long", 90.0, 110.0, ts, hi, lo) == 0
+    # TP (idx1) before SL (idx2) -> win
+    hi2 = np.array([100.0, 111.0, 100.0, 100.0])
+    lo2 = np.array([100.0, 100.0, 89.0, 100.0])
+    assert resolve_barrier(-1.0, "long", 90.0, 110.0, ts, hi2, lo2) == 1
+
+
+def test_resolve_barrier_intrabar_tie_is_conservative():
+    # both barriers first touched in the SAME candle -> conservative = SL (0)
+    from app.analysis.walkforward import resolve_barrier
+    ts = np.array([0.0, 1.0])
+    hi = np.array([100.0, 111.0])   # idx1 hits tp=110
+    lo = np.array([100.0, 89.0])    # idx1 also hits sl=90
+    assert resolve_barrier(-1.0, "long", 90.0, 110.0, ts, hi, lo) == 0
+    assert resolve_barrier(-1.0, "long", 90.0, 110.0, ts, hi, lo, tie_to_sl=False) == 1
+
+
+def test_resolve_barrier_short_and_no_hit():
+    from app.analysis.walkforward import resolve_barrier
+    ts = np.array([0.0, 1.0, 2.0])
+    # short tp=90 (low<=90 wins), sl=110 (high>=110 loses). low 89 at idx1 -> win
+    hi = np.array([100.0, 100.0, 100.0]); lo = np.array([100.0, 89.0, 100.0])
+    assert resolve_barrier(-1.0, "short", 110.0, 90.0, ts, hi, lo) == 1
+    # neither barrier hit -> None
+    flat_h = np.array([100.0, 101.0, 100.0]); flat_l = np.array([99.0, 100.0, 99.0])
+    assert resolve_barrier(-1.0, "long", 90.0, 110.0, ts, flat_h, flat_l) is None
+
+
 async def test_prune_analyses_by_rowcount(tmp_path):
     db = Database(str(tmp_path / "a.db")); await db.connect()
     for i in range(25):

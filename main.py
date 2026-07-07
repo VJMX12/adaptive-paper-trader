@@ -23,6 +23,7 @@ import numpy as np
 from app.analysis.engine import AnalysisEngine
 from app.analysis.model import load_learner_state, save_learner_state
 from app.analysis.reasoning import analysis_reasoning
+from app.analysis.walkforward import resolve_barrier
 from app.config import load_config
 from app.dashboard.server import start_dashboard
 from app.data.collector import MarketDataCollector
@@ -166,23 +167,11 @@ class App:
         learned = 0
         for s in await self.db.open_shadow_setups(sym, self._shadow_max_resolve):
             e_ms = float(s["entry_ms"])
-            fwd = ts > e_ms
-            if not bool(fwd.any()):
-                continue
-            long = s["direction"] == "long"
-            sl_v, tp_v = float(s["stop_loss"]), float(s["take_profit"])
-            fh, fl = hi[fwd], lo[fwd]
-            if long:
-                tp_idx = np.argmax(fh >= tp_v) if (fh >= tp_v).any() else None
-                sl_idx = np.argmax(fl <= sl_v) if (fl <= sl_v).any() else None
-            else:
-                tp_idx = np.argmax(fl <= tp_v) if (fl <= tp_v).any() else None
-                sl_idx = np.argmax(fh >= sl_v) if (fh >= sl_v).any() else None
-            outcome = None
-            if tp_idx is not None and (sl_idx is None or tp_idx <= sl_idx):
-                outcome = 1
-            elif sl_idx is not None:
-                outcome = 0
+            # forward-only barrier resolution (see walkforward.resolve_barrier —
+            # strictly ts > entry_ms, so no future info leaks into the label)
+            outcome = resolve_barrier(e_ms, s["direction"],
+                                      float(s["stop_loss"]), float(s["take_profit"]),
+                                      ts, hi, lo)
             if outcome is not None:
                 try:
                     self.engine.learn_from_shadow(

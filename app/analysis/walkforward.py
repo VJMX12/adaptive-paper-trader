@@ -32,6 +32,44 @@ PASS = {
 }
 
 
+def resolve_barrier(entry_ms, direction, stop_loss, take_profit,
+                    ts, high, low, tie_to_sl: bool = True):
+    """Resolve a shadow setup against the forward price path: did TP hit before
+    SL? Returns 1 (TP-first), 0 (SL-first), or None (neither yet).
+
+    NO LOOKAHEAD: only candles STRICTLY AFTER the entry candle (ts > entry_ms)
+    are considered, so the label never sees information from at/before entry.
+    Intrabar ambiguity (both barriers first touched in the SAME candle — order
+    unknowable from OHLC) resolves to SL by default (conservative), since the
+    nearer barrier is the more likely first touch; assuming TP would inflate the
+    win rate and the training labels.
+    """
+    ts = np.asarray(ts, dtype=float)
+    high = np.asarray(high, dtype=float)
+    low = np.asarray(low, dtype=float)
+    fwd = ts > entry_ms                      # strictly forward — the leak guard
+    if not bool(fwd.any()):
+        return None
+    fh, fl = high[fwd], low[fwd]
+    if direction == "long":
+        tp_hit, sl_hit = fh >= take_profit, fl <= stop_loss
+    else:
+        tp_hit, sl_hit = fl <= take_profit, fh >= stop_loss
+    tp_idx = int(np.argmax(tp_hit)) if tp_hit.any() else None
+    sl_idx = int(np.argmax(sl_hit)) if sl_hit.any() else None
+    if tp_idx is None and sl_idx is None:
+        return None
+    if sl_idx is None:
+        return 1
+    if tp_idx is None:
+        return 0
+    if tp_idx < sl_idx:
+        return 1
+    if sl_idx < tp_idx:
+        return 0
+    return 0 if tie_to_sl else 1             # same candle: conservative -> SL
+
+
 def _dedupe(trades: list[dict]) -> list[dict]:
     """Overlapping step windows share trades; dedupe before any overall
     aggregate so a trade is never counted 2-3x (which biases the verdict)."""

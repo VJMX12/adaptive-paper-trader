@@ -1,11 +1,23 @@
 {
+  "statusLine": {
+    "type": "command",
+    "command": "sh -c 'D=\"${CLAUDE_PROJECT_DIR:-.}\"; [ -f \"$D/.claude/helpers/statusline.cjs\" ] || D=\"${HOME}\"; exec node \"$D/.claude/helpers/statusline.cjs\"'"
+  },
   "permissions": {
     "allow": [
-      "Skill(claude-api)",
-      "Skill(claude-api:*)",
-      "Bash(grep -v -E '\\\\.\\(db|json\\)$|__pycache__|\\\\.git/')",
-      "Bash(grep -v -E '\\\\.git/|__pycache__|\\\\.db$')",
-      "Bash(echo \"dockerignore: $?\")"
+      "Bash(npx @claude-flow*)",
+      "Bash(npx claude-flow*)",
+      "Bash(node .claude/*)",
+      "mcp__claude-flow__*"
+    ],
+    "deny": [
+      "Read(./.env)",
+      "Read(./.env.*)"
     ]
+  },
+  "env": {
+    "CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS": "1",
+    "CLAUDE_FLOW_V3_ENABLED": "true",
+    "CLAUDE_FLOW_HOOKS_ENABLED": "true"
   }
 }
