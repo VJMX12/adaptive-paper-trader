@@ -69,7 +69,7 @@ class App:
         self._shadow_max_resolve = int(
             self.cfg.get("shadow.max_resolve_per_cycle", 80))
         self._shadow_since_save = 0
-        self._analyses_keep_days = int(self.cfg.get("retention.analyses_days", 14))
+        self._analyses_keep_rows = int(self.cfg.get("retention.analyses_max_rows", 60000))
 
     # ------------------------------------------------------------------
     async def analyzer_loop(self, symbol: str) -> None:
@@ -200,7 +200,7 @@ class App:
             if self._shadow_since_save >= 20:   # persist learner periodically
                 save_learner_state(LEARNER_STATE_PATH, self.model, self.calibration)
                 await self.db.prune_shadow_setups()          # bound shadow table
-                await self.db.prune_analyses(self._analyses_keep_days)  # bound disk
+                await self.db.prune_analyses(self._analyses_keep_rows)  # bound disk
                 self._shadow_since_save = 0
             log.info("shadow_resolved", symbol=sym, learned=learned)
 
@@ -349,11 +349,12 @@ class App:
             f"({', '.join(self.cfg.get('exchange.symbols'))}). "
             f"Execution: {mode}.")
 
-        # bound disk on boot: drop analyses older than the retention window
+        # bound disk on boot: cap the analyses table to the retention row count
         try:
-            dropped = await self.db.prune_analyses(self._analyses_keep_days)
-            if dropped:
-                log.info("pruned_analyses", rows=dropped, keep_days=self._analyses_keep_days)
+            total = await self.db.analyses_count()
+            dropped = await self.db.prune_analyses(self._analyses_keep_rows)
+            log.info("analyses_retention", total_before=total, dropped=dropped,
+                     keep_rows=self._analyses_keep_rows)
         except Exception as e:
             log.error("prune_analyses_error", error=str(e))
 

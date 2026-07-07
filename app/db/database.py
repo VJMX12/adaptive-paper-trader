@@ -366,15 +366,21 @@ class Database:
             (resolved, outcome, sid))
         await self.db.commit()
 
-    async def prune_analyses(self, keep_days: int = 14) -> int:
-        """The analyses table grows ~20MB/day (100 symbols × every cycle) and is
-        the dominant disk consumer. Only recent rows matter (feed shows last
-        ~250, regime stability uses recent), so drop older ones to plateau the
-        volume. SQLite reuses freed pages, so the file size stops growing."""
-        cutoff = (datetime.now(timezone.utc) - timedelta(days=keep_days)).isoformat()
-        cur = await self.db.execute("DELETE FROM analyses WHERE ts < ?", (cutoff,))
+    async def prune_analyses(self, keep_rows: int = 60000) -> int:
+        """The analyses table (100 symbols × every cycle) is the dominant disk
+        consumer and grows without bound. Cap it by ROW COUNT — a deterministic
+        disk bound independent of per-row byte size — keeping the most recent
+        rows (feed shows last ~250, regime stability uses recent). SQLite reuses
+        freed pages so the file plateaus. ~60k rows ≈ 2 days across 100 symbols."""
+        cur = await self.db.execute(
+            "DELETE FROM analyses WHERE id NOT IN "
+            "(SELECT id FROM analyses ORDER BY id DESC LIMIT ?)", (keep_rows,))
         await self.db.commit()
         return cur.rowcount or 0
+
+    async def analyses_count(self) -> int:
+        cur = await self.db.execute("SELECT COUNT(*) c FROM analyses")
+        return int((await cur.fetchone())["c"])
 
     async def prune_shadow_setups(self, keep: int = 50000) -> int:
         """Cap the resolved/expired shadow rows (already learned from) so the

@@ -156,15 +156,14 @@ async def test_shadow_prune_keeps_recent(tmp_path):
     await db.close()
 
 
-async def test_prune_analyses_by_age(tmp_path):
+async def test_prune_analyses_by_rowcount(tmp_path):
     db = Database(str(tmp_path / "a.db")); await db.connect()
-    old = (datetime.now(timezone.utc) - timedelta(days=30)).isoformat()
-    new = datetime.now(timezone.utc).isoformat()
-    for ts in (old, old, new):
-        await db.insert_analysis({"ts": ts, "symbol": "BTC/USDT:USDT", "price": 1.0,
+    for i in range(25):
+        await db.insert_analysis({"symbol": "BTC/USDT:USDT", "price": 1.0,
             "bias": "neutral", "confidence": 0.5, "regime_posterior": [1.0],
             "changepoint_prob": 0.0, "features": {}, "trade_recommended": False})
-    deleted = await db.prune_analyses(keep_days=14)
-    assert deleted == 2
-    assert len(await db.recent_analyses(10)) == 1
+    assert await db.analyses_count() == 25
+    deleted = await db.prune_analyses(keep_rows=10)
+    assert deleted == 15
+    assert await db.analyses_count() == 10
     await db.close()

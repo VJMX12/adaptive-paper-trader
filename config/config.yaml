@@ -179,10 +179,11 @@ shadow:
   max_resolve_per_cycle: 80  # cap resolution work per symbol per cycle
 
 retention:
-  # The analyses table writes ~28.8k rows/day (100 symbols × every cycle) and is
-  # the dominant disk consumer. Keep only recent rows so the SQLite file plateaus
-  # (freed pages are reused) instead of growing ~20MB/day forever.
-  analyses_days: 14
+  # The analyses table (100 symbols × every cycle) is the dominant disk consumer
+  # and grows without bound. Cap it by ROW COUNT so disk is bounded regardless of
+  # per-row size; freed pages are reused so the SQLite file plateaus.
+  # ~60k rows ≈ 2 days across 100 symbols — plenty for the feed + regime stability.
+  analyses_max_rows: 60000
 
 llm:
   enabled: false             # true = use Anthropic API for narrative reasoning & reviews
