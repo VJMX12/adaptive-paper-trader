@@ -178,6 +178,12 @@ shadow:
   horizon_hours: 48          # give up (expire) if neither barrier hit within this
   max_resolve_per_cycle: 80  # cap resolution work per symbol per cycle
 
+retention:
+  # The analyses table writes ~28.8k rows/day (100 symbols × every cycle) and is
+  # the dominant disk consumer. Keep only recent rows so the SQLite file plateaus
+  # (freed pages are reused) instead of growing ~20MB/day forever.
+  analyses_days: 14
+
 llm:
   enabled: false             # true = use Anthropic API for narrative reasoning & reviews
   model: claude-sonnet-4-6

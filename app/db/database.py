@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 import json
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
@@ -365,6 +365,16 @@ class Database:
             "UPDATE shadow_setups SET resolved=?, outcome=? WHERE id=?",
             (resolved, outcome, sid))
         await self.db.commit()
+
+    async def prune_analyses(self, keep_days: int = 14) -> int:
+        """The analyses table grows ~20MB/day (100 symbols × every cycle) and is
+        the dominant disk consumer. Only recent rows matter (feed shows last
+        ~250, regime stability uses recent), so drop older ones to plateau the
+        volume. SQLite reuses freed pages, so the file size stops growing."""
+        cutoff = (datetime.now(timezone.utc) - timedelta(days=keep_days)).isoformat()
+        cur = await self.db.execute("DELETE FROM analyses WHERE ts < ?", (cutoff,))
+        await self.db.commit()
+        return cur.rowcount or 0
 
     async def prune_shadow_setups(self, keep: int = 50000) -> int:
         """Cap the resolved/expired shadow rows (already learned from) so the
