@@ -124,7 +124,7 @@ async def _security_mw(request, handler):
 
 def build_app(db: Database, starting_equity: float,
               info: dict | None = None, learner_provider=None,
-              cfg=None) -> web.Application:
+              cfg=None, feed=None) -> web.Application:
     app = web.Application(middlewares=[_security_mw])
     info = info or {}
 
@@ -156,10 +156,11 @@ def build_app(db: Database, starting_equity: float,
     async def equity(_req):
         return web.json_response(await db.equity_curve(), dumps=_dumps)
 
-    async def live(_req):
+    async def live(req):
         """Cheap per-second payload (no metrics scan): equity, open, positions,
         + a shadow-labeling heartbeat so the training signal is visibly moving.
-        Polled every 1s by the client for lag-free liveness through any proxy."""
+        Polled every 1s by the client for lag-free liveness through any proxy.
+        ?ev_after=<id> returns only activity-feed events newer than that id."""
         payload = {
             "open": await db.open_positions_count(),
             "equity": await db.latest_equity(starting_equity),
@@ -170,6 +171,13 @@ def build_app(db: Database, starting_equity: float,
             payload["shadow"] = await db.shadow_counts()
         except Exception:
             pass
+        if feed is not None:
+            try:
+                after = int(req.query.get("ev_after", 0))
+            except (TypeError, ValueError):
+                after = 0
+            payload["events"] = feed.tail(max(0, after))
+            payload["events_top"] = feed.top
         return web.json_response(payload, dumps=_dumps)
 
     async def learner(_req):
@@ -244,12 +252,13 @@ def build_app(db: Database, starting_equity: float,
 async def start_dashboard(db: Database, starting_equity: float,
                           host: str, port: int,
                           info: dict | None = None,
-                          learner_provider=None, cfg=None) -> web.AppRunner:
+                          learner_provider=None, cfg=None,
+                          feed=None) -> web.AppRunner:
     if not os.getenv("DASHBOARD_PASS"):
         log.warning("dashboard_open",
                     hint="no DASHBOARD_PASS set — dashboard is publicly "
                          "readable. Set DASHBOARD_PASS to require Basic Auth.")
-    app = build_app(db, starting_equity, info, learner_provider, cfg)
+    app = build_app(db, starting_equity, info, learner_provider, cfg, feed)
     runner = web.AppRunner(app)
     await runner.setup()
     site = web.TCPSite(runner, host, port)

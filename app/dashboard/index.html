@@ -50,6 +50,14 @@ tr:hover td{background:var(--panel2)}
 .meter u{position:absolute;top:-2px;bottom:-2px;width:2px;background:var(--ink3)}
 .meter.cp i{background:var(--warn)}
 .empty{color:var(--ink3);padding:18px 4px;font-size:12.5px}
+#chat{max-height:300px;overflow-y:auto;display:flex;flex-direction:column;gap:6px;padding-right:4px}
+.msg{background:var(--panel2);border:1px solid var(--line);border-radius:0 10px 10px 10px;padding:7px 11px;font-size:12.5px;line-height:1.45;max-width:900px;white-space:normal;animation:msgin .25s ease}
+.msg .mt{color:var(--ink3);font-size:10px;margin-right:8px;font-variant-numeric:tabular-nums}
+.msg.learn{border-left:2px solid var(--accent)}
+.msg.open{border-left:2px solid var(--good)}
+.msg.close{border-left:2px solid var(--warn)}
+.msg.veto,.msg.skip{border-left:2px solid var(--ink3)}
+@keyframes msgin{from{opacity:0;transform:translateY(4px)}to{opacity:1;transform:none}}
 .chips{display:flex;gap:8px;margin:12px 0 0;flex-wrap:wrap;align-items:center}
 .chips select{background:var(--panel);color:var(--ink);border:1px solid var(--line);border-radius:6px;padding:4px 8px;font:inherit;font-size:12px}
 .chip{cursor:pointer;border:1px solid var(--line);color:var(--ink2);border-radius:999px;padding:3px 12px;font-size:11px;letter-spacing:.1em}
@@ -73,6 +81,11 @@ footer{margin-top:14px;color:var(--ink3);font-size:11px;display:flex;gap:14px;fl
 </header>
 
 <div class="grid tiles" id="tiles"></div>
+
+<div class="card" style="margin-top:12px">
+  <h2>Bot chat — what I'm doing &amp; learning right now</h2>
+  <div id="chat"><div class="empty">waiting for the bot to say something… (it speaks whenever it opens, closes or skips a trade, or learns from a practice setup)</div></div>
+</div>
 
 <div class="card" style="margin-top:12px">
   <h2>Equity — paper account (USD)</h2>
@@ -338,6 +351,28 @@ function renderLearner(L){
      <div style="margin-top:8px;font-size:11px"><a href="/learner">⤓ full learner JSON</a></div>`;
 }
 
+// -------- bot chat: plain-language activity feed (polled with /live) --------
+let EV_AFTER = 0;
+function pushEvents(p){
+  // server restarted? its ids reset below what we've seen — start over
+  if(p.events_top != null && p.events_top < EV_AFTER){ EV_AFTER = 0; $("#chat").innerHTML = ""; }
+  const evs = p.events;
+  if(!evs || !evs.length) return;
+  const box = $("#chat");
+  const stick = box.scrollHeight - box.scrollTop - box.clientHeight < 48;
+  if(box.querySelector(".empty")) box.innerHTML = "";
+  for(const e of evs){
+    if(e.id <= EV_AFTER) continue;
+    EV_AFTER = e.id;
+    const d = document.createElement("div");
+    d.className = "msg " + esc(e.kind||"");
+    d.innerHTML = `<span class="mt">${esc(new Date(e.ts).toLocaleTimeString())}</span>${esc(e.text)}`;
+    box.appendChild(d);
+  }
+  while(box.children.length > 150) box.removeChild(box.firstChild);
+  if(stick) box.scrollTop = box.scrollHeight;
+}
+
 // -------- live state, updated by the SSE stream (server push, per second) --------
 const STATE = {metrics:null, positions:[], trades:[], analyses:[], learner:null, shadow:null};
 let SHADOW_HIST = [];       // ring buffer of {t, r} for rate + sparkline
@@ -420,6 +455,7 @@ function applyPayload(p){
   if("equity" in p) STATE.equity = p.equity;
   if(p.positions) STATE.positions = p.positions;
   if(p.shadow){ STATE.shadow = p.shadow; pushShadow(p.shadow); }
+  if("events_top" in p || p.events) pushEvents(p);
   let heavy = false;
   if(p.metrics){ STATE.metrics = p.metrics; heavy = true; }
   if(p.trades) STATE.trades = p.trades;
@@ -468,7 +504,7 @@ async function validationTick(){
 let _beatFail=0;
 async function lightTick(){
   try{
-    const p = await fetch("/live").then(r=>r.json());
+    const p = await fetch("/live?ev_after="+EV_AFTER).then(r=>r.json());
     applyPayload(p);              // updates equity hero, open count, positions, clock
     _beatFail=0;
   }catch(e){ if(++_beatFail>3) $("#sync").textContent="offline?"; }

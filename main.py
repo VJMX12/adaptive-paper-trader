@@ -25,6 +25,7 @@ from app.analysis.model import load_learner_state, save_learner_state
 from app.analysis.reasoning import analysis_reasoning
 from app.analysis.walkforward import resolve_barrier
 from app.config import load_config
+from app.dashboard.feed import ActivityFeed
 from app.dashboard.server import start_dashboard
 from app.data.collector import MarketDataCollector
 from app.db.database import Database
@@ -40,6 +41,11 @@ from app.trading.risk import RiskManager
 
 LEARNER_STATE_PATH = "data/learner_state.json"
 log = get_logger("main")
+
+
+def _short(sym: str) -> str:
+    """BTC/USDT:USDT -> BTC (for human-readable feed messages)."""
+    return (sym or "").split("/")[0]
 
 
 class App:
@@ -62,6 +68,7 @@ class App:
         self.executor = BybitExecutor(self.cfg)
         self.monitor = TradeMonitor(self.cfg, self.db, self.collector, self.paper)
         self.tg = TelegramNotifier(self.cfg)
+        self.feed = ActivityFeed()
         self._stop = asyncio.Event()
         self._analysis_count: dict[str, int] = {}
         self._shadow_enabled = bool(self.cfg.get("shadow.enabled", True))
@@ -100,6 +107,11 @@ class App:
                         res.veto_reasons.append(
                             f"blended confidence {res.confidence:.2f} "
                             f"< {self.engine.min_conf:.2f} (similar-history drag)")
+                        self.feed.say("veto", (
+                            f"🧠 {_short(symbol)}: a {res.direction} setup looked "
+                            f"promising, but my memory of similar past setups "
+                            f"dragged confidence down to {res.confidence:.0%} — "
+                            f"standing aside."), symbol)
                         res.direction = None
 
                     reasoning = await analysis_reasoning(self.cfg, res, retrieval)
@@ -136,11 +148,21 @@ class App:
                             res, reasoning, retrieval)
                         if trade_id:
                             t = await self.db.get_trade(trade_id)
+                            risk = float(t.get("risk_amount") or 0)
+                            self.feed.say("open", (
+                                f"🚀 Opened a paper {str(res.direction).upper()} "
+                                f"on {_short(symbol)} at {res.price:g} — "
+                                f"{res.confidence:.0%} confident. Risking "
+                                f"${risk:.2f} to make about "
+                                f"${risk * (res.rr or 0):.2f}."), symbol)
                             await self._mirror_open(t, res)
                             await self.tg.trade_opened(
                                 trade_id, res, t["position_size"],
                                 t["risk_amount"], reasoning)
                         else:
+                            self.feed.say("skip", (
+                                f"⏸ Liked a {res.direction} on {_short(symbol)} "
+                                f"but held back: {why}."), symbol)
                             log.info("entry_skipped", symbol=symbol, why=why)
             except Exception as e:
                 log.error("analyzer_error", symbol=symbol, error=str(e), exc_info=True)
@@ -165,6 +187,7 @@ class App:
         latest_ms = float(ts[-1])
         oldest_ms = float(ts[0])
         learned = 0
+        tp_hits = 0
         for s in await self.db.open_shadow_setups(sym, self._shadow_max_resolve):
             e_ms = float(s["entry_ms"])
             # forward-only barrier resolution (see walkforward.resolve_barrier —
@@ -180,17 +203,27 @@ class App:
                     log.error("shadow_learn_failed", id=s["id"], error=str(e))
                 await self.db.resolve_shadow_setup(s["id"], 1, outcome)
                 learned += 1
+                tp_hits += 1 if outcome else 0
             elif (latest_ms - e_ms) >= self._shadow_horizon_ms or e_ms < oldest_ms:
                 # neither barrier hit within the horizon / data window -> expire
                 await self.db.resolve_shadow_setup(s["id"], 2, None)
 
         if learned:
+            self.feed.say("learn", (
+                f"📚 {_short(sym)}: checked {learned} practice setup"
+                f"{'s' if learned != 1 else ''} against what price actually "
+                f"did — {tp_hits} would have hit take-profit, "
+                f"{learned - tp_hits} the stop. Lessons learned so far: "
+                f"{self.model.n_updates:,}."), sym)
             self._shadow_since_save += learned
             if self._shadow_since_save >= 20:   # persist learner periodically
                 save_learner_state(LEARNER_STATE_PATH, self.model, self.calibration)
                 await self.db.prune_shadow_setups()          # bound shadow table
                 await self.db.prune_analyses(self._analyses_keep_rows)  # bound disk
                 self._shadow_since_save = 0
+                self.feed.say("save", (
+                    f"💾 Progress saved — everything learned "
+                    f"({self.model.n_updates:,} lessons) is now safe on disk."))
             log.info("shadow_resolved", symbol=sym, learned=learned)
 
     async def _mirror_open(self, t: dict, res) -> None:
@@ -287,6 +320,15 @@ class App:
     async def _handle_closed_trade(self, trade: dict) -> None:
         import json as _json
         won = (trade.get("pnl_usd") or 0) > 0
+        pnl = float(trade.get("pnl_usd") or 0)
+        base = _short(trade.get("symbol", ""))
+        self.feed.say("close", (
+            f"✅ {base} {trade.get('direction')} closed "
+            f"({trade.get('exit_reason')}): +${pnl:.2f}. I'll trust setups "
+            f"like this a little more.") if won else (
+            f"❌ {base} {trade.get('direction')} closed "
+            f"({trade.get('exit_reason')}): −${abs(pnl):.2f}. I'll be more "
+            f"careful with setups like this."), trade.get("symbol"))
         # 1) learning updates FIRST — the paper trade is already terminally
         #    closed, so if we let the (fallible) live close run first and it
         #    raised, this outcome would be lost from the model forever.
@@ -329,6 +371,11 @@ class App:
         if not (await self.db.equity_curve()):
             await self.db.record_equity(self.risk.starting_equity, "start")
         mode = "LIVE" if self.executor.live else "dry-run (no real orders)"
+        self.feed.say("sys", (
+            f"🟢 Bot is up in {mode} mode — watching "
+            f"{len(self.cfg.get('exchange.symbols'))} markets with a "
+            f"${eq:,.2f} paper balance. I'll narrate here every time I open, "
+            f"close, skip a trade, or learn from a practice setup."))
         log.info("startup", equity=eq,
                  symbols=self.cfg.get("exchange.symbols"),
                  exchange=self.cfg.get("exchange.id"),
@@ -364,7 +411,7 @@ class App:
                     "model": self.model.snapshot(FeatureVector.names()),
                     "calibration": self.calibration.snapshot(),
                 },
-                cfg=self.cfg,
+                cfg=self.cfg, feed=self.feed,
                 info={
                     "mode": mode,
                     "live": self.executor.live,
