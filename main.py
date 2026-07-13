@@ -61,7 +61,10 @@ class App:
             market_type=str(self.cfg.get("exchange.market_type", "swap")),
         )
         n_features = len(FeatureVector.names())
-        self.model, self.calibration = load_learner_state(LEARNER_STATE_PATH, n_features)
+        self.model, self.calibration = load_learner_state(
+            LEARNER_STATE_PATH, n_features,
+            lr=self.cfg.get("learner.lr"), l2=self.cfg.get("learner.l2"),
+            decay=self.cfg.get("learner.decay"))
         self.engine = AnalysisEngine(self.cfg, self.model, self.calibration)
         self.risk = RiskManager(self.cfg)
         self.paper = PaperTradingEngine(self.cfg, self.db, self.risk)
@@ -209,7 +212,8 @@ class App:
             if outcome is not None:
                 try:
                     self.engine.learn_from_shadow(
-                        json.loads(s["features"]), s["direction"], bool(outcome))
+                        json.loads(s["features"]), s["direction"], bool(outcome),
+                        symbol=sym)
                 except Exception as e:
                     log.error("shadow_learn_failed", id=s["id"], error=str(e))
                 await self.db.resolve_shadow_setup(s["id"], 1, outcome)
@@ -347,7 +351,7 @@ class App:
             feats = _json.loads(trade["features"])
             self.engine.learn_from_trade(
                 feats, trade["direction"], won, float(trade["confidence"]),
-                exit_reason=trade.get("exit_reason"))
+                exit_reason=trade.get("exit_reason"), symbol=trade.get("symbol"))
             save_learner_state(LEARNER_STATE_PATH, self.model, self.calibration)
         except Exception as e:
             log.error("learning_update_failed", trade_id=trade.get("id"),

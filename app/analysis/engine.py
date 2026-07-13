@@ -80,6 +80,14 @@ class AnalysisEngine:
         self.sl_mult = float(cfg.get("strategy.sl_sigma_mult", 1.6))
         self.tp_rr = float(cfg.get("strategy.tp_rr", 2.0))
         self.cp_alert = float(cfg.get("changepoint.alert_threshold", 0.35))
+        # Concept-drift adaptation: temporarily speed up learning for a symbol
+        # right after a changepoint (regime shift), then relax back to the base
+        # rate once things settle -- lets the model re-anchor to a NEW market
+        # regime fast instead of being dragged down by stale pre-shift weights,
+        # without noisily over-reacting during normal (stable-regime) trading.
+        self.cp_lr_boost = float(cfg.get("learner.changepoint_lr_boost", 0.0))
+        self.cold_start_handover = float(cfg.get("learner.cold_start_handover", 150))
+        self._latest_cp: dict[str, float] = {}
 
     # ---------- regime machinery ----------
     def _ensure_regime_models(self, snap: MarketSnapshot):
@@ -109,6 +117,7 @@ class AnalysisEngine:
         else:
             det.update(float(obs[-1, 0]))   # one new candle per cycle
         cp_prob = det.p_recent_changepoint(within=6)
+        self._latest_cp[sym] = cp_prob
         return posterior, regime_label, cp_prob, hmm
 
     # ---------- direction & probability ----------
@@ -142,7 +151,7 @@ class AnalysisEngine:
         # direction to the drift belief and keep confidence modest (a bounded
         # prior that fades out as real outcomes accumulate). Handover at 150
         # updates (~9 samples/feature) — 40 trusted a barely-seen model too soon.
-        w = min(1.0, self.model.n_updates / 150.0)
+        w = min(1.0, self.model.n_updates / self.cold_start_handover)
         prior_mag = 0.20 * float(np.tanh(abs(score)))     # <=0.20 -> caps prior at 0.70
         favored = "long" if score >= 0 else "short"
         p_long_b = w * p_long + (1 - w) * (0.5 + (prior_mag if favored == "long" else -prior_mag))
@@ -214,8 +223,13 @@ class AnalysisEngine:
         )
 
     # ---------- learning ----------
+    def _lr_mult(self, symbol: str | None) -> float:
+        cp = self._latest_cp.get(symbol, 0.0) if symbol else 0.0
+        return 1.0 + self.cp_lr_boost * cp
+
     def learn_from_trade(self, entry_features: dict, direction: str, won: bool,
-                         stated_confidence: float, exit_reason: str | None = None) -> None:
+                         stated_confidence: float, exit_reason: str | None = None,
+                         symbol: str | None = None) -> None:
         """Update learner + calibration after a closed trade.
 
         Target = P(TP before SL): only tp/sl exits are a clean barrier outcome.
@@ -227,14 +241,14 @@ class AnalysisEngine:
         if exit_reason is not None and exit_reason not in ("tp", "sl"):
             return
         fv = FeatureVector(**{n: float(entry_features[n]) for n in FeatureVector.names()})
-        self.model.update(fv.oriented(direction), int(won))
+        self.model.update(fv.oriented(direction), int(won), lr_mult=self._lr_mult(symbol))
         self.calibration.record(stated_confidence, int(won))
 
     def learn_from_shadow(self, entry_features: dict, direction: str,
-                          won: bool) -> None:
+                          won: bool, symbol: str | None = None) -> None:
         """Train on a SHADOW label: a recommended setup resolved against the
         forward price path (TP-before-SL) even though no live trade opened.
         Model weights only (not calibration — no stated confidence was acted
         on). This multiplies training signal far beyond actual fills."""
         fv = FeatureVector(**{n: float(entry_features[n]) for n in FeatureVector.names()})
-        self.model.update(fv.oriented(direction), int(won))
+        self.model.update(fv.oriented(direction), int(won), lr_mult=self._lr_mult(symbol))

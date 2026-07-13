@@ -162,21 +162,27 @@ regime:
 
 changepoint:
   hazard: 250.0        # expected run length between changepoints (in candles)
-  alert_threshold: 0.35  # P(changepoint in last few candles) above this = uncertainty alarm
+  alert_threshold: 0.45  # P(changepoint in last few candles) above this = uncertainty alarm
+  # raised from 0.35: was vetoing a lot of entries on mild drift; the
+  # learner.changepoint_lr_boost below compensates by learning FASTER through
+  # real regime shifts instead of just refusing to trade near them.
 
 strategy:
-  min_confidence: 0.60   # do not trade below this calibrated confidence
-  min_rr: 1.5            # minimum acceptable risk/reward
+  min_confidence: 0.52   # do not trade below this calibrated confidence
+  min_rr: 1.2            # minimum acceptable risk/reward
+  # both loosened from 0.60/1.5 for more trade volume -> faster learning
+  # feedback. This is paper money; the cost of a wider net is noisier P&L,
+  # not real capital, so it's an acceptable trade for training signal.
   sl_sigma_mult: 1.6     # stop distance in units of current volatility sigma
   tp_rr: 2.0             # take-profit distance = tp_rr * stop distance
-  cooldown_minutes: 45   # per-symbol cooldown after closing a trade
+  cooldown_minutes: 15   # per-symbol cooldown after closing a trade (was 45)
   max_trade_hours: 48    # time-based exit safety net
 
 risk:
   starting_equity: 10000.0
   base_risk_pct: 0.01        # risk per trade at full multipliers
-  kelly_fraction: 0.25       # fraction of full Kelly ever used
-  max_open_positions: 3
+  kelly_fraction: 0.35       # fraction of full Kelly ever used (was 0.25)
+  max_open_positions: 6      # was 3 -- more concurrent paper trades = more signal/week
   vol_target_annual: 0.35    # annualized volatility target for scaling
   drawdown_soft_pct: 0.05    # exposure starts decaying past this drawdown
   drawdown_hard_pct: 0.15    # circuit breaker: no new trades beyond this
@@ -184,7 +190,25 @@ risk:
 
 retrieval:
   k: 15                # similar historical trades retrieved per analysis
-  min_history: 8       # below this many closed trades, retrieval is informational only
+  min_history: 5       # below this many closed trades, retrieval is informational only (was 8)
+
+learner:
+  # Online logistic learner tuning (app/analysis/model.py). Overrides apply on
+  # every restart even to an already-persisted model (see load_learner_state).
+  lr: 0.05                    # base SGD step size (was hardcoded 0.03)
+  l2: 0.02                     # weight-decay regularization (unchanged)
+  decay: 0.995                 # EWMA forgetting for the feature normalizer (unchanged)
+  cold_start_handover: 80       # #updates before fully trusting the model over
+                                 # the drift prior (was hardcoded 150) -- trust
+                                 # its own read sooner as it accumulates trades.
+  changepoint_lr_boost: 3.0
+  # NEW: concept-drift adaptation. Effective lr for a symbol becomes
+  # lr * (1 + changepoint_lr_boost * P(changepoint)) at the moment of
+  # learning, so right after a real regime shift the model snaps to the new
+  # conditions in far fewer samples, then relaxes back to the base rate once
+  # BOCPD says the market has settled. This is what should help the model
+  # "retain" edge as the market's actual behavior changes over time, instead
+  # of dragging outdated pre-shift weights forward.
 
 validation:
   # Walk-forward / prequential out-of-sample validation (exposed at /validation).
@@ -199,8 +223,8 @@ shadow:
   # resolves it against the forward price path (TP-before-SL), training the
   # learner far beyond the rare live fills. Fixes data starvation + cold-start bias.
   enabled: true
-  horizon_hours: 48          # give up (expire) if neither barrier hit within this
-  max_resolve_per_cycle: 80  # cap resolution work per symbol per cycle
+  horizon_hours: 24          # give up (expire) if neither barrier hit within this (was 48)
+  max_resolve_per_cycle: 150 # cap resolution work per symbol per cycle (was 80)
 
 retention:
   # The analyses table (100 symbols × every cycle) is the dominant disk consumer

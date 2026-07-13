@@ -71,14 +71,19 @@ class OnlineLogistic:
         s = float(self.w @ z + self.b)
         return float(1.0 / (1.0 + np.exp(-np.clip(s, -30, 30))))
 
-    def update(self, x: np.ndarray, y: int) -> None:
+    def update(self, x: np.ndarray, y: int, lr_mult: float = 1.0) -> None:
         # Stats already advance in observe() on every analysis; do NOT advance
         # them again here (that would double-count and bias toward closed trades).
+        # lr_mult lets the caller speed up learning right after a detected
+        # changepoint (see AnalysisEngine.cp_lr_boost) without permanently
+        # raising the base rate, which would just make normal-regime learning
+        # noisier.
         z = self._normalize(x, update_stats=False)
         p = 1.0 / (1.0 + np.exp(-np.clip(float(self.w @ z + self.b), -30, 30)))
         g = p - float(y)
-        self.w -= self.lr * (g * z + self.l2 * self.w)
-        self.b -= self.lr * g
+        lr = self.lr * lr_mult
+        self.w -= lr * (g * z + self.l2 * self.w)
+        self.b -= lr * g
         self.n_updates += 1
 
     def contributions(self, x: np.ndarray, names: list[str], top: int = 5):
@@ -115,8 +120,14 @@ class OnlineLogistic:
         }
 
     @classmethod
-    def from_dict(cls, d: dict) -> "OnlineLogistic":
-        m = cls(d["n"], l2=d.get("l2", 2e-2), decay=d.get("decay", 0.995))
+    def from_dict(cls, d: dict, lr: float | None = None, l2: float | None = None,
+                  decay: float | None = None) -> "OnlineLogistic":
+        # lr/l2/decay passed in (from config) win over the persisted values, so
+        # a retune in config.yaml takes effect on the very next restart instead
+        # of requiring a model reset.
+        m = cls(d["n"], lr=lr if lr is not None else 0.03,
+                l2=l2 if l2 is not None else d.get("l2", 2e-2),
+                decay=decay if decay is not None else d.get("decay", 0.995))
         m.w = np.array(d["w"]); m.b = d["b"]; m.count = d["count"]
         m.mean = np.array(d["mean"]); m.var = np.array(d["var"])
         m.n_updates = d.get("n_updates", 0)
@@ -200,21 +211,25 @@ def save_learner_state(path: str | Path, model: OnlineLogistic, cal: Calibration
     }, allow_nan=False))
 
 
-def load_learner_state(path: str | Path, n_features: int):
+def load_learner_state(path: str | Path, n_features: int, lr: float | None = None,
+                       l2: float | None = None, decay: float | None = None):
+    fresh = lambda: OnlineLogistic(
+        n_features, **{k: v for k, v in
+                       (("lr", lr), ("l2", l2), ("decay", decay)) if v is not None})
     p = Path(path)
     if not p.exists():
-        return OnlineLogistic(n_features), CalibrationTracker()
+        return fresh(), CalibrationTracker()
     try:
         d = json.loads(p.read_text())
         if d.get("version") != MODEL_VERSION:  # old scheme -> retrain fresh
-            return OnlineLogistic(n_features), CalibrationTracker()
-        model = OnlineLogistic.from_dict(d["model"])
+            return fresh(), CalibrationTracker()
+        model = OnlineLogistic.from_dict(d["model"], lr=lr, l2=l2, decay=decay)
         if model.n != n_features:  # feature schema changed -> start fresh
-            return OnlineLogistic(n_features), CalibrationTracker()
+            return fresh(), CalibrationTracker()
         # Reject a corrupted/poisoned state rather than trade on garbage.
         if not (np.all(np.isfinite(model.w)) and np.isfinite(model.b)
                 and np.all(np.isfinite(model.mean)) and np.all(np.isfinite(model.var))):
-            return OnlineLogistic(n_features), CalibrationTracker()
+            return fresh(), CalibrationTracker()
         return model, CalibrationTracker.from_dict(d["calibration"])
     except Exception:
-        return OnlineLogistic(n_features), CalibrationTracker()
+        return fresh(), CalibrationTracker()
