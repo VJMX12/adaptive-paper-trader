@@ -107,6 +107,30 @@ exchange:
     - RPL/USDT:USDT
   timeframe: 5m
   candles_lookback: 600  # candles fetched per analysis cycle
+  excluded_symbols:
+    # Bybit's synthetic stock/commodity perpetuals (not crypto): far thinner
+    # order books than BTC/ETH majors, so costs.slippage_pct (tuned for crypto
+    # majors) understates real execution cost on these -> the shared learner
+    # can pick up a systematically wrong edge from this subset. Excluded
+    # pending separate cost calibration; re-enable individually once slippage
+    # is measured per-symbol.
+    - XAU/USDT:USDT
+    - XAG/USDT:USDT
+    - XAUT/USDT:USDT
+    - SPCX/USDT:USDT
+    - MSTR/USDT:USDT
+    - BABA/USDT:USDT
+    - CL/USDT:USDT
+    - EWY/USDT:USDT
+    - SKHYNIX/USDT:USDT
+    - SNDK/USDT:USDT
+    - BTW/USDT:USDT
+    - GRAM/USDT:USDT
+    - CRCL/USDT:USDT
+    - DRAM/USDT:USDT
+    - BILL/USDT:USDT
+    - BEAT/USDT:USDT
+    - ES/USDT:USDT
 
 live:
   # Real orders on Bybit require ALL THREE, else dry-run (logs, never sends):

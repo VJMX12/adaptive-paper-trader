@@ -78,6 +78,10 @@ class App:
             self.cfg.get("shadow.max_resolve_per_cycle", 80))
         self._shadow_since_save = 0
         self._analyses_keep_rows = int(self.cfg.get("retention.analyses_max_rows", 60000))
+        excluded = set(self.cfg.get("exchange.excluded_symbols", []) or [])
+        self._symbols = [s for s in self.cfg.get("exchange.symbols")
+                          if s not in excluded]
+        self._last_shadow_regime: dict[str, str] = {}
 
     # ------------------------------------------------------------------
     async def analyzer_loop(self, symbol: str) -> None:
@@ -173,9 +177,16 @@ class App:
         shadow setups for this symbol against the forward price path (did TP hit
         before SL?) and train the learner on the clean barrier outcome."""
         sym = snap.symbol
-        # 1) record the current setup (guard degenerate geometry)
+        # 1) record the current setup (guard degenerate geometry). Only take one
+        # shadow sample per regime-run per symbol: regime.sticky implies a regime
+        # persists for ~1/(1-sticky) candles, so recording every cycle treats
+        # dozens of highly correlated observations of the same market state as
+        # independent training evidence (pseudo-replication) and inflates the
+        # learner's apparent confidence beyond its real effective sample size.
+        regime_changed = self._last_shadow_regime.get(sym) != res.regime_label
+        self._last_shadow_regime[sym] = res.regime_label
         d, sl, tp = res.shadow_direction, res.shadow_stop, res.shadow_take_profit
-        if (d in ("long", "short") and sl and tp
+        if (regime_changed and d in ("long", "short") and sl and tp
                 and np.isfinite(sl) and np.isfinite(tp) and sl != res.price):
             await self.db.record_shadow_setup({
                 "symbol": sym, "direction": d, "entry_price": res.price,
@@ -373,16 +384,16 @@ class App:
         mode = "LIVE" if self.executor.live else "dry-run (no real orders)"
         self.feed.say("sys", (
             f"🟢 Bot is up in {mode} mode — watching "
-            f"{len(self.cfg.get('exchange.symbols'))} markets with a "
+            f"{len(self._symbols)} markets with a "
             f"${eq:,.2f} paper balance. I'll narrate here every time I open, "
             f"close, skip a trade, or learn from a practice setup."))
         log.info("startup", equity=eq,
-                 symbols=self.cfg.get("exchange.symbols"),
+                 symbols=self._symbols,
                  exchange=self.cfg.get("exchange.id"),
                  execution_mode=mode)
         await self.tg.system_event(
             f"Adaptive Paper Trader started — equity ${eq:,.2f} "
-            f"({', '.join(self.cfg.get('exchange.symbols'))}). "
+            f"({', '.join(self._symbols)}). "
             f"Execution: {mode}.")
 
         # bound disk on boot: cap the analyses table to the retention row count
@@ -417,7 +428,7 @@ class App:
                     "live": self.executor.live,
                     "exchange": self.cfg.get("exchange.id"),
                     "market_type": self.cfg.get("exchange.market_type", "swap"),
-                    "symbols": self.cfg.get("exchange.symbols"),
+                    "symbols": self._symbols,
                     "timeframe": self.cfg.get("exchange.timeframe"),
                     "min_confidence": float(
                         self.cfg.get("strategy.min_confidence", 0.6)),
@@ -427,7 +438,7 @@ class App:
             log.info("dashboard_up", port=port)
 
         tasks = [asyncio.create_task(self.analyzer_loop(s))
-                 for s in self.cfg.get("exchange.symbols")]
+                 for s in self._symbols]
         tasks.append(asyncio.create_task(self.monitor_loop()))
 
         loop = asyncio.get_running_loop()
