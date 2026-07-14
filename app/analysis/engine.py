@@ -25,6 +25,25 @@ TIMEFRAME_MINUTES = {
     "1h": 60, "2h": 120, "4h": 240, "1d": 1440,
 }
 
+# Key under which the entry-time normalizer snapshot rides alongside a
+# FeatureVector in persisted JSON (trades.features / shadow_setups.features).
+# pack/unpack are the single place that format is defined, so callers never
+# hand-roll the dict shape (and risk the two copies drifting apart).
+_NORM_SNAPSHOT_KEY = "_norm_snapshot"
+
+
+def pack_entry_features(fv: FeatureVector, norm_snapshot: dict) -> dict:
+    """Serialize entry features + normalizer snapshot for DB persistence."""
+    return {**fv.as_dict(), _NORM_SNAPSHOT_KEY: norm_snapshot}
+
+
+def unpack_entry_features(stored: dict) -> tuple[dict, dict | None]:
+    """Inverse of pack_entry_features. Returns (raw FeatureVector fields,
+    norm snapshot) — snapshot is None for legacy records predating this
+    fix, which callers treat as "use the model's live normalizer"."""
+    stored = dict(stored)
+    return stored, stored.pop(_NORM_SNAPSHOT_KEY, None)
+
 
 @dataclass
 class AnalysisResult:

@@ -9,7 +9,19 @@ import numpy as np
 from app.db.database import Database
 
 
-async def compute_metrics(db: Database, starting_equity: float) -> dict:
+async def compute_metrics(db: Database, starting_equity: float,
+                          universe: set[str] | None = None) -> dict:
+    """`universe`, when given, is the set of symbols currently traded (e.g.
+    the live config's symbol list). Financial totals (equity, total PnL,
+    period buckets) always cover ALL closed trades — that's real account
+    history and shouldn't be hidden. But *strategy-quality* diagnostics
+    (win rate, profit factor, expectancy, regime/setup breakdown,
+    calibration) are computed only over `universe` trades: legacy trades on
+    symbols no longer traded (e.g. thin synthetic/commodity pairs dropped
+    from an earlier, wider universe) skew these with execution artifacts —
+    extreme slippage on illiquid instruments — that have nothing to do with
+    how the current strategy performs on its current symbol list.
+    """
     trades = await db.get_closed_trades()
     curve = await db.equity_curve()
     out: dict = {
@@ -21,8 +33,17 @@ async def compute_metrics(db: Database, starting_equity: float) -> dict:
     if not trades:
         return out
 
-    pnl = np.array([t["pnl_usd"] or 0.0 for t in trades])
-    rs = np.array([t["r_multiple"] or 0.0 for t in trades])
+    pnl_all = np.array([t["pnl_usd"] or 0.0 for t in trades])
+    out["total_pnl_usd"] = round(float(pnl_all.sum()), 2)
+
+    strategy_trades = ([t for t in trades if t["symbol"] in universe]
+                       if universe else trades)
+    out["legacy_trades_excluded_from_stats"] = len(trades) - len(strategy_trades)
+    if not strategy_trades:
+        return out
+
+    pnl = np.array([t["pnl_usd"] or 0.0 for t in strategy_trades])
+    rs = np.array([t["r_multiple"] or 0.0 for t in strategy_trades])
     wins, losses = pnl[pnl > 0], pnl[pnl <= 0]
 
     out["win_rate"] = round(float((pnl > 0).mean()), 4)
@@ -33,7 +54,6 @@ async def compute_metrics(db: Database, starting_equity: float) -> dict:
     )
     out["expectancy_usd"] = round(float(pnl.mean()), 4)
     out["expectancy_r"] = round(float(rs.mean()), 4)
-    out["total_pnl_usd"] = round(float(pnl.sum()), 2)
 
     # --- drawdown & Sharpe from equity curve ---
     if curve:
@@ -99,7 +119,7 @@ async def compute_metrics(db: Database, starting_equity: float) -> dict:
     # --- performance by regime / by symbol+direction ---
     by_regime: dict[str, list[float]] = defaultdict(list)
     by_setup: dict[str, list[float]] = defaultdict(list)
-    for t in trades:
+    for t in strategy_trades:
         by_regime[t["regime_label"] or "unknown"].append(t["r_multiple"] or 0.0)
         by_setup[f"{t['symbol']} {t['direction']}"].append(t["r_multiple"] or 0.0)
 
@@ -119,7 +139,7 @@ async def compute_metrics(db: Database, starting_equity: float) -> dict:
         out["best_setup"] = {ranked[-1][0]: ranked[-1][1]}
 
     # --- confidence accuracy (were stated probabilities honest?) ---
-    conf = np.array([t["confidence"] or 0.5 for t in trades])
+    conf = np.array([t["confidence"] or 0.5 for t in strategy_trades])
     won = (pnl > 0).astype(float)
     out["brier_score"] = round(float(np.mean((conf - won) ** 2)), 4)
     buckets = []

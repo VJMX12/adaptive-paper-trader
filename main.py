@@ -20,7 +20,7 @@ import signal
 
 import numpy as np
 
-from app.analysis.engine import AnalysisEngine
+from app.analysis.engine import AnalysisEngine, pack_entry_features, unpack_entry_features
 from app.analysis.model import load_learner_state, save_learner_state
 from app.analysis.reasoning import analysis_reasoning
 from app.analysis.walkforward import resolve_barrier
@@ -194,8 +194,8 @@ class App:
             await self.db.record_shadow_setup({
                 "symbol": sym, "direction": d, "entry_price": res.price,
                 "entry_ms": int(snap.ts[-1]), "stop_loss": sl,
-                "take_profit": tp, "features": {**res.features.as_dict(),
-                                                "_norm_snapshot": res.norm_snapshot}})
+                "take_profit": tp,
+                "features": pack_entry_features(res.features, res.norm_snapshot)})
 
         # 2) resolve matured setups using this snapshot's OHLC path
         ts, hi, lo = snap.ts, snap.high, snap.low
@@ -212,8 +212,7 @@ class App:
                                       ts, hi, lo)
             if outcome is not None:
                 try:
-                    feats = json.loads(s["features"])
-                    norm_snap = feats.pop("_norm_snapshot", None)
+                    feats, norm_snap = unpack_entry_features(json.loads(s["features"]))
                     self.engine.learn_from_shadow(
                         feats, s["direction"], bool(outcome),
                         symbol=sym, norm_snapshot=norm_snap)
@@ -351,8 +350,7 @@ class App:
         #    closed, so if we let the (fallible) live close run first and it
         #    raised, this outcome would be lost from the model forever.
         try:
-            feats = _json.loads(trade["features"])
-            norm_snap = feats.pop("_norm_snapshot", None)
+            feats, norm_snap = unpack_entry_features(_json.loads(trade["features"]))
             self.engine.learn_from_trade(
                 feats, trade["direction"], won, float(trade["confidence"]),
                 exit_reason=trade.get("exit_reason"), symbol=trade.get("symbol"),

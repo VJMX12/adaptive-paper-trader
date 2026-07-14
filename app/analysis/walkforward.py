@@ -239,6 +239,16 @@ def run_walk_forward(closed_trades: list[dict], analyses: list[dict],
     test_days = int(g("validation.test_days", 7))
     step_days = int(g("validation.step_days", 3))
 
+    # Exclude trades on symbols no longer in the live universe (e.g. thin
+    # synthetic/commodity pairs dropped from an earlier, wider symbol list).
+    # Their execution artifacts (extreme slippage on illiquid instruments)
+    # aren't representative of the current strategy's out-of-sample edge.
+    universe = set(g("exchange.symbols", []) or [])
+    n_before = len(closed_trades)
+    if universe:
+        closed_trades = [t for t in closed_trades if t.get("symbol") in universe]
+    legacy_excluded = n_before - len(closed_trades)
+
     windows = assign_windows(closed_trades, train_days, test_days, step_days)
     per_window, test_wrs, test_briers, test_sharpes = [], [], [], []
     for w in windows:
@@ -298,6 +308,7 @@ def run_walk_forward(closed_trades: list[dict], analyses: list[dict],
         "config": {"train_days": train_days, "test_days": test_days,
                    "step_days": step_days},
         "total_windows": len(windows), "valid_test_windows": n_valid_windows,
+        "legacy_trades_excluded": legacy_excluded,
         "overall_metrics": {
             "test_win_rate": overall_test.get("win_rate"),
             "test_sharpe": overall_test.get("sharpe"),      # per-trade (effect size)

@@ -80,7 +80,8 @@ async def _snapshot(db, starting_equity, info, learner_provider, heavy: bool) ->
                       for r in await db.get_open_trades()],
     }
     if heavy:
-        m = await compute_metrics(db, starting_equity)
+        m = await compute_metrics(db, starting_equity,
+                                  universe=set(info.get("symbols") or []) or None)
         m["system"] = info
         payload["metrics"] = m
         closed = await db.get_closed_trades(limit=5000)
@@ -137,7 +138,8 @@ def build_app(db: Database, starting_equity: float,
                             content_type="text/html")
 
     async def metrics(_req):
-        m = await compute_metrics(db, starting_equity)
+        m = await compute_metrics(db, starting_equity,
+                                  universe=set(info.get("symbols") or []) or None)
         m["system"] = info
         return web.json_response(m, dumps=_dumps)
 

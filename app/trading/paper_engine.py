@@ -9,7 +9,7 @@ from __future__ import annotations
 import asyncio
 from datetime import datetime, timezone
 
-from app.analysis.engine import AnalysisResult
+from app.analysis.engine import AnalysisResult, pack_entry_features
 from app.db.database import Database, utcnow
 from app.logging_setup import get_logger
 from app.trading.risk import RiskManager, SizingDecision
@@ -91,8 +91,7 @@ class PaperTradingEngine:
                 "confidence": res.confidence, "raw_prob": res.raw_prob,
                 "regime_label": res.regime_label,
                 "changepoint_prob": res.changepoint_prob,
-                "features": {**res.features.as_dict(),
-                            "_norm_snapshot": res.norm_snapshot},
+                "features": pack_entry_features(res.features, res.norm_snapshot),
                 "reasoning": reasoning,
                 "similar_trades": {
                     "n": len(retrieval.get("neighbors") or []),
