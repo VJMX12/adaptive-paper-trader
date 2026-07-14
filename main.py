@@ -92,11 +92,21 @@ class App:
         self._last_shadow_regime: dict[str, str] = {}
 
     # ------------------------------------------------------------------
-    async def analyzer_loop(self, symbol: str) -> None:
+    async def analyzer_loop(self, symbol: str, initial_delay: float = 0.0) -> None:
         interval = float(self.cfg.get("engine.analysis_interval_seconds", 300))
         warmup = int(self.cfg.get("engine.warmup_candles", 250))
         k = int(self.cfg.get("retrieval.k", 15))
         min_hist = int(self.cfg.get("retrieval.min_history", 8))
+
+        # All symbol loops otherwise start at the exact same instant and each
+        # sleeps the full `interval` after processing, so without this they'd
+        # run in permanent lockstep: every symbol analyzed in one ~5-10s burst,
+        # then the entire engine idle for the rest of the interval. Staggering
+        # start times spreads analyses evenly across the interval instead —
+        # smoother exchange API load, and the dashboard heartbeat reflects
+        # continuous activity instead of bursty spikes.
+        if initial_delay:
+            await _wait(self._stop, initial_delay)
 
         while not self._stop.is_set():
             try:
@@ -455,8 +465,11 @@ class App:
                 })
             log.info("dashboard_up", port=port)
 
-        tasks = [asyncio.create_task(self.analyzer_loop(s))
-                 for s in self._symbols]
+        stagger_interval = float(self.cfg.get("engine.analysis_interval_seconds", 300))
+        n = max(1, len(self._symbols))
+        tasks = [asyncio.create_task(
+                    self.analyzer_loop(s, initial_delay=i * stagger_interval / n))
+                 for i, s in enumerate(self._symbols)]
         tasks.append(asyncio.create_task(self.monitor_loop()))
 
         loop = asyncio.get_running_loop()
