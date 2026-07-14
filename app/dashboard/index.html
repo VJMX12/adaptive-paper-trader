@@ -83,6 +83,13 @@ footer{margin-top:14px;color:var(--ink3);font-size:11px;display:flex;gap:14px;fl
 <div class="grid tiles" id="tiles"></div>
 
 <div class="card" style="margin-top:12px">
+  <h2>Engine heartbeat
+    <span id="heartbeat-dot" style="display:inline-block;width:9px;height:9px;border-radius:50%;background:var(--ink3);margin-left:8px;transition:background-color .3s"></span>
+  </h2>
+  <div id="heartbeat"><div class="empty">waiting for the first tick…</div></div>
+</div>
+
+<div class="card" style="margin-top:12px">
   <h2>Bot chat — what I'm doing &amp; learning right now</h2>
   <div id="chat"><div class="empty">waiting for the bot to say something… (it speaks whenever it opens, closes or skips a trade, or learns from a practice setup)</div></div>
 </div>
@@ -392,6 +399,48 @@ const STATE = {metrics:null, positions:[], trades:[], analyses:[], learner:null,
 let SHADOW_HIST = [];       // ring buffer of {t, r} for rate + sparkline
 let _lastResolved = null;
 
+// -------- engine heartbeat: analysis-cycle count, ticks every second
+// regardless of trades/shadow-labels/chat activity -- the most direct
+// "is the loop actually alive" signal, immune to the gaps bot-chat has
+// when nothing tradeable happens for a while.
+let CYCLE_HIST = [];     // ring buffer of {t, delta} per second, last 60s
+let _lastCycleCount = null;
+
+function pushHeartbeat(cycleCount){
+  if(cycleCount==null) return;
+  const now = Date.now();
+  const delta = _lastCycleCount==null ? 0 : Math.max(0, cycleCount - _lastCycleCount);
+  _lastCycleCount = cycleCount;
+  CYCLE_HIST.push({t: now, d: delta});
+  if(CYCLE_HIST.length > 60) CYCLE_HIST.shift();
+  renderHeartbeat();
+}
+
+function renderHeartbeat(){
+  const dot = $("#heartbeat-dot");
+  if(!CYCLE_HIST.length) return;
+  const recentActive = CYCLE_HIST.slice(-10).some(x=>x.d>0);
+  if(dot) dot.style.background = recentActive ? "var(--good)" : "var(--warn)";
+
+  const W=560, H=36, n=CYCLE_HIST.length, bw=W/60;
+  const maxD = Math.max(1, ...CYCLE_HIST.map(x=>x.d));
+  const bars = CYCLE_HIST.map((x,i)=>{
+    const h = (x.d/maxD)*(H-4);
+    const x0 = W - (n-i)*bw;
+    return `<rect x="${x0.toFixed(1)}" y="${(H-h).toFixed(1)}" width="${(bw-1).toFixed(1)}" height="${h.toFixed(1)}" fill="${x.d>0?'#3987e5':'#2a2f38'}"/>`;
+  }).join("");
+  const totalRecent = CYCLE_HIST.reduce((a,x)=>a+x.d, 0);
+  const secs = Math.max(1, (CYCLE_HIST[n-1].t - CYCLE_HIST[0].t)/1000);
+  const perMin = (totalRecent/secs*60).toFixed(1);
+  $("#heartbeat").innerHTML =
+    `<svg viewBox="0 0 ${W} ${H}" width="100%" height="${H}" preserveAspectRatio="none">${bars}</svg>
+     <div style="color:var(--ink3);font-size:11px;margin-top:4px">
+       ${_lastCycleCount!=null? _lastCycleCount.toLocaleString()+" total analysis cycles":"—"}
+       · ~${perMin}/min over last ${Math.round(secs)}s
+       ${!CYCLE_HIST.slice(-10).some(x=>x.d>0)? ' · <span style="color:var(--warn)">no new cycles in last 10s — engine may be busy or stalled</span>' : ''}
+     </div>`;
+}
+
 function pushShadow(sh){
   if(!sh || sh.resolved==null) return;
   const now = Date.now();
@@ -494,6 +543,7 @@ function applyPayload(p){
   if("equity" in p) STATE.equity = p.equity;
   if(p.positions) STATE.positions = p.positions;
   if(p.shadow){ STATE.shadow = p.shadow; pushShadow(p.shadow); }
+  if("cycle_count" in p) pushHeartbeat(p.cycle_count);
   if("events_top" in p || p.events) pushEvents(p);
   let heavy = false;
   if(p.metrics){ STATE.metrics = p.metrics; heavy = true; }

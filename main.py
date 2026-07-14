@@ -429,6 +429,7 @@ class App:
                     "model": self.model.snapshot(FeatureVector.names()),
                     "calibration": self.calibration.snapshot(),
                 },
+                cycle_count_provider=lambda: sum(self._analysis_count.values()),
                 cfg=self.cfg, feed=self.feed,
                 info={
                     "mode": mode,

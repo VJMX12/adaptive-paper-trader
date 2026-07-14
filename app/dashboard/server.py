@@ -129,7 +129,7 @@ async def _security_mw(request, handler):
 
 def build_app(db: Database, starting_equity: float,
               info: dict | None = None, learner_provider=None,
-              cfg=None, feed=None) -> web.Application:
+              cfg=None, feed=None, cycle_count_provider=None) -> web.Application:
     app = web.Application(middlewares=[_security_mw])
     info = info or {}
 
@@ -177,6 +177,11 @@ def build_app(db: Database, starting_equity: float,
             payload["shadow"] = await db.shadow_counts()
         except Exception:
             pass
+        if cycle_count_provider is not None:
+            try:
+                payload["cycle_count"] = cycle_count_provider()
+            except Exception:
+                pass
         if feed is not None:
             try:
                 after = int(req.query.get("ev_after", 0))
@@ -304,12 +309,13 @@ async def start_dashboard(db: Database, starting_equity: float,
                           host: str, port: int,
                           info: dict | None = None,
                           learner_provider=None, cfg=None,
-                          feed=None) -> web.AppRunner:
+                          feed=None, cycle_count_provider=None) -> web.AppRunner:
     if not os.getenv("DASHBOARD_PASS"):
         log.warning("dashboard_open",
                     hint="no DASHBOARD_PASS set — dashboard is publicly "
                          "readable. Set DASHBOARD_PASS to require Basic Auth.")
-    app = build_app(db, starting_equity, info, learner_provider, cfg, feed)
+    app = build_app(db, starting_equity, info, learner_provider, cfg, feed,
+                    cycle_count_provider)
     runner = web.AppRunner(app)
     await runner.setup()
     site = web.TCPSite(runner, host, port)
