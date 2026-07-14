@@ -117,6 +117,20 @@ footer{margin-top:14px;color:var(--ink3);font-size:11px;display:flex;gap:14px;fl
 </div>
 
 <div class="card" style="margin-top:12px">
+  <h2>PnL by period
+    <select id="pnlRange" style="float:right;font-size:12px;background:var(--bg2,#161a20);color:var(--ink);border:1px solid var(--ink3);border-radius:4px;padding:2px 6px">
+      <option value="today">Today</option>
+      <option value="this_week" selected>This week</option>
+      <option value="last_week">Last week</option>
+      <option value="this_month">This month</option>
+      <option value="last_month">Last month</option>
+      <option value="all">All time</option>
+    </select>
+  </h2>
+  <div id="pnlRangeView"><div class="empty">loading…</div></div>
+</div>
+
+<div class="card" style="margin-top:12px">
   <h2>Shadow labeling — live training signal <span id="shadowbeat" style="color:var(--good);opacity:0.25;transition:opacity .4s">●</span></h2>
   <div id="shadow"><div class="empty">waiting for shadow labels…</div></div>
 </div>
@@ -449,7 +463,32 @@ function renderHeavy(){
   renderOutcomes(STATE.trades);
   renderLearner(STATE.learner);
   renderAnalyses(STATE.analyses, (m.system||{}).min_confidence ?? .6);
+  renderPnlRange(m);
 }
+
+const PNL_RANGE_LABEL = {today:"today", this_week:"this week", last_week:"last week",
+  this_month:"this month", last_month:"last month", all:"all time"};
+function renderPnlRange(m){
+  const sel = $("#pnlRange").value;
+  let usdVal, sub;
+  if(sel === "all"){
+    usdVal = m.total_pnl_usd ?? 0;
+    sub = m.n_trades ? `${m.n_trades} trades total` : "no trades yet";
+  } else {
+    const r = (m.pnl_ranges||{})[sel];
+    if(!r){ $("#pnlRangeView").innerHTML = `<div class="empty">no data yet</div>`; return; }
+    usdVal = r.pnl_usd;
+    sub = `${r.days_with_trades} day(s) with closed trades, ${PNL_RANGE_LABEL[sel]}`;
+  }
+  $("#pnlRangeView").innerHTML =
+    `<div class="tile hero"><div class="k">PnL — ${esc(PNL_RANGE_LABEL[sel]||sel)}</div>
+     <div class="v ${sign(usdVal)}">${usd(usdVal)}</div>
+     <div class="s">${esc(sub)}</div></div>`;
+}
+document.addEventListener("DOMContentLoaded", ()=>{
+  const el = document.getElementById("pnlRange");
+  if(el) el.addEventListener("change", ()=>{ if(STATE.metrics) renderPnlRange(STATE.metrics); });
+});
 
 function applyPayload(p){
   if("equity" in p) STATE.equity = p.equity;
@@ -492,10 +531,14 @@ function renderValidation(v){
        ${stat("TEST TRADES", (om.n_test_trades!=null?om.n_test_trades:"—")+" / "+(v.valid_test_windows||0)+"w")}
      </div>
      <div class="chips" style="margin:0">${chips}</div>
-     <div style="margin-top:8px;font-size:11px"><a href="/validation">⤓ full walk-forward JSON</a></div>`;
+     <div style="margin-top:8px;font-size:11px;color:var(--ink3)">
+       recomputed ${v.computed_at?ago(v.computed_at*1000)+" ago":"—"} · refreshes every ${Math.round((v.refresh_interval_secs||900)/60)}m
+       · <a href="#" onclick="validationTick(true);return false;">refresh now</a>
+       · <a href="/validation">⤓ full walk-forward JSON</a>
+     </div>`;
 }
-async function validationTick(){
-  try{ renderValidation(await fetch("/validation").then(r=>r.json())); }catch(e){}
+async function validationTick(force){
+  try{ renderValidation(await fetch("/validation"+(force?"?refresh=1":"")).then(r=>r.json())); }catch(e){}
 }
 
 // Two-tier polling: a cheap /live payload every 1s (equity, open, positions)

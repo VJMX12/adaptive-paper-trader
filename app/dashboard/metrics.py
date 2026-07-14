@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 from collections import defaultdict
-from datetime import datetime
+from datetime import datetime, timedelta
 
 import numpy as np
 
@@ -46,15 +46,55 @@ async def compute_metrics(db: Database, starting_equity: float) -> dict:
             out["sharpe_per_trade"] = round(float(rets.mean() / rets.std()
                                                   * np.sqrt(len(rets))), 3)
 
-    # --- monthly returns ---
+    # --- daily / weekly / monthly PnL buckets (for time-range views) ---
+    daily: dict[str, float] = defaultdict(float)
+    weekly: dict[str, float] = defaultdict(float)
     monthly: dict[str, float] = defaultdict(float)
     for t in trades:
         try:
-            m = datetime.fromisoformat(t["exit_ts"]).strftime("%Y-%m")
-            monthly[m] += t["pnl_usd"] or 0.0
+            dt = datetime.fromisoformat(t["exit_ts"])
         except (ValueError, TypeError):
             continue
+        v = t["pnl_usd"] or 0.0
+        daily[dt.strftime("%Y-%m-%d")] += v
+        iso_year, iso_week, _ = dt.isocalendar()
+        weekly[f"{iso_year}-W{iso_week:02d}"] += v
+        monthly[dt.strftime("%Y-%m")] += v
+    out["daily_pnl_usd"] = {k: round(v, 2) for k, v in sorted(daily.items())}
+    out["weekly_pnl_usd"] = {k: round(v, 2) for k, v in sorted(weekly.items())}
     out["monthly_pnl_usd"] = {k: round(v, 2) for k, v in sorted(monthly.items())}
+
+    # --- convenience rollups for "this/last week/month" dashboard views ---
+    now = datetime.now()
+    today = now.date()
+    week_start = today - timedelta(days=today.weekday())
+    last_week_start = week_start - timedelta(days=7)
+    month_start = today.replace(day=1)
+    last_month_end = month_start - timedelta(days=1)
+    last_month_start = last_month_end.replace(day=1)
+
+    def _sum_daily(d0, d1_exclusive) -> tuple[float, int]:
+        total, n = 0.0, 0
+        for k, v in daily.items():
+            d = datetime.strptime(k, "%Y-%m-%d").date()
+            if d0 <= d < d1_exclusive:
+                total += v
+                n += 1
+        return round(total, 2), n
+
+    tomorrow = today + timedelta(days=1)
+    pnl_today, n_today = _sum_daily(today, tomorrow)
+    pnl_this_week, n_this_week = _sum_daily(week_start, tomorrow)
+    pnl_last_week, n_last_week = _sum_daily(last_week_start, week_start)
+    pnl_this_month, n_this_month = _sum_daily(month_start, tomorrow)
+    pnl_last_month, n_last_month = _sum_daily(last_month_start, month_start)
+    out["pnl_ranges"] = {
+        "today": {"pnl_usd": pnl_today, "days_with_trades": n_today},
+        "this_week": {"pnl_usd": pnl_this_week, "days_with_trades": n_this_week},
+        "last_week": {"pnl_usd": pnl_last_week, "days_with_trades": n_last_week},
+        "this_month": {"pnl_usd": pnl_this_month, "days_with_trades": n_this_month},
+        "last_month": {"pnl_usd": pnl_last_month, "days_with_trades": n_last_month},
+    }
 
     # --- performance by regime / by symbol+direction ---
     by_regime: dict[str, list[float]] = defaultdict(list)

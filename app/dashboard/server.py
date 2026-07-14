@@ -23,6 +23,7 @@ import hmac
 import io
 import json
 import os
+import time
 from pathlib import Path
 
 from aiohttp import web
@@ -45,6 +46,9 @@ _TRADE_COLS = (
 _CSP = ("default-src 'self'; script-src 'self' 'unsafe-inline'; "
         "style-src 'self' 'unsafe-inline'; connect-src 'self'; img-src 'self'; "
         "base-uri 'none'; object-src 'none'; frame-ancestors 'none'")
+VALIDATION_REFRESH_SECS = 900  # walk-forward is a slow-moving stat; no need
+                               # to re-scan up to 100k trades more often
+
 _SEC_HEADERS = {
     "Content-Security-Policy": _CSP,
     "X-Content-Type-Options": "nosniff",
@@ -189,12 +193,57 @@ def build_app(db: Database, starting_equity: float,
             pass
         return web.json_response(snap, dumps=_dumps)
 
-    async def validation(_req):
-        """Walk-forward / prequential out-of-sample edge validation."""
+    validation_cache: dict = {"result": None, "computed_at": 0.0}
+
+    async def _recompute_validation():
         trades = await db.get_closed_trades(limit=100000)
         analyses = await db.recent_analyses(5000)
-        return web.json_response(run_walk_forward(trades, analyses, cfg),
-                                 dumps=_dumps)
+        result = run_walk_forward(trades, analyses, cfg)
+        result["computed_at"] = time.time()
+        result["refresh_interval_secs"] = VALIDATION_REFRESH_SECS
+        validation_cache["result"] = result
+        validation_cache["computed_at"] = result["computed_at"]
+        return result
+
+    async def _validation_refresh_loop():
+        while True:
+            try:
+                await _recompute_validation()
+            except Exception as e:
+                log.warning("validation_refresh_failed", error=str(e))
+            await asyncio.sleep(VALIDATION_REFRESH_SECS)
+
+    async def validation(req):
+        """Walk-forward / prequential out-of-sample edge validation.
+
+        Recomputed on a background timer (every VALIDATION_REFRESH_SECS)
+        rather than per-request, since it's a heavy scan over closed trades
+        and the underlying stat only moves as fast as new trades close.
+        Pass ?refresh=1 to force an immediate recompute.
+        """
+        if req.query.get("refresh") == "1" or validation_cache["result"] is None:
+            result = await _recompute_validation()
+        else:
+            result = validation_cache["result"]
+        return web.json_response(result, dumps=_dumps)
+
+    app["_validation_refresh_task"] = None
+
+    async def _on_startup(_app):
+        _app["_validation_refresh_task"] = asyncio.create_task(
+            _validation_refresh_loop())
+
+    async def _on_cleanup(_app):
+        task = _app.get("_validation_refresh_task")
+        if task:
+            task.cancel()
+            try:
+                await task
+            except asyncio.CancelledError:
+                pass
+
+    app.on_startup.append(_on_startup)
+    app.on_cleanup.append(_on_cleanup)
 
     async def stream(request):
         """Server-Sent Events: push live state every second (server-driven,
