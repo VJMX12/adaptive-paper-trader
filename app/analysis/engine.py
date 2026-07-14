@@ -54,6 +54,10 @@ class AnalysisResult:
     shadow_direction: str | None = None
     shadow_stop: float | None = None
     shadow_take_profit: float | None = None
+    # normalizer state at the moment confidence was scored (see
+    # OnlineLogistic.snapshot_norm) — persisted alongside entry features so
+    # learn_from_trade/learn_from_shadow can re-score on the same scale later.
+    norm_snapshot: dict = field(default_factory=dict)
 
 
 class AnalysisEngine:
@@ -167,6 +171,13 @@ class AnalysisEngine:
         posterior, regime_label, cp_prob, hmm = self._ensure_regime_models(snap)
         direction, p_dir = self._directional_view(fv, posterior, hmm)
         shrunk = self.calibration.shrink(p_dir)
+        # Freeze the normalizer NOW, at the moment p_dir/confidence was scored —
+        # the model's mean/var keep advancing on every symbol's every cycle, so
+        # by the time this trade/shadow-setup resolves and calls learn_from_*,
+        # self.model's live normalizer has drifted well past this. Persisting
+        # this snapshot alongside the entry features lets training happen on
+        # the SAME feature scale that produced the reported confidence.
+        norm_snapshot = self.model.snapshot_norm()
 
         price = snap.last_price
         sigma_px = fv.sigma * price                 # per-candle sigma in price units
@@ -220,6 +231,7 @@ class AnalysisEngine:
             invalidation=invalidation,
             sigma_per_candle=fv.sigma, candles_per_year=self.candles_per_year,
             shadow_direction=direction, shadow_stop=stop, shadow_take_profit=tp,
+            norm_snapshot=norm_snapshot,
         )
 
     # ---------- learning ----------
@@ -229,7 +241,7 @@ class AnalysisEngine:
 
     def learn_from_trade(self, entry_features: dict, direction: str, won: bool,
                          stated_confidence: float, exit_reason: str | None = None,
-                         symbol: str | None = None) -> None:
+                         symbol: str | None = None, norm_snapshot: dict | None = None) -> None:
         """Update learner + calibration after a closed trade.
 
         Target = P(TP before SL): only tp/sl exits are a clean barrier outcome.
@@ -237,18 +249,27 @@ class AnalysisEngine:
         a different condition, so they DON'T train the P(win) head (they'd teach
         the model the wrong event). Calibration only records clean outcomes too,
         so its Brier measures the same event the confidence predicts.
+
+        norm_snapshot (from AnalysisResult.norm_snapshot, persisted on the
+        trade) re-scores the entry features on the SAME normalizer state that
+        produced stated_confidence, instead of today's drifted one — without
+        this, entry-time confidence and this update silently disagree about
+        what the raw feature values mean.
         """
         if exit_reason is not None and exit_reason not in ("tp", "sl"):
             return
         fv = FeatureVector(**{n: float(entry_features[n]) for n in FeatureVector.names()})
-        self.model.update(fv.oriented(direction), int(won), lr_mult=self._lr_mult(symbol))
+        self.model.update(fv.oriented(direction), int(won),
+                          lr_mult=self._lr_mult(symbol), norm=norm_snapshot)
         self.calibration.record(stated_confidence, int(won))
 
     def learn_from_shadow(self, entry_features: dict, direction: str,
-                          won: bool, symbol: str | None = None) -> None:
+                          won: bool, symbol: str | None = None,
+                          norm_snapshot: dict | None = None) -> None:
         """Train on a SHADOW label: a recommended setup resolved against the
         forward price path (TP-before-SL) even though no live trade opened.
         Model weights only (not calibration — no stated confidence was acted
         on). This multiplies training signal far beyond actual fills."""
         fv = FeatureVector(**{n: float(entry_features[n]) for n in FeatureVector.names()})
-        self.model.update(fv.oriented(direction), int(won), lr_mult=self._lr_mult(symbol))
+        self.model.update(fv.oriented(direction), int(won),
+                          lr_mult=self._lr_mult(symbol), norm=norm_snapshot)

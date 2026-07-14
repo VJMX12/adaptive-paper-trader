@@ -91,7 +91,9 @@ class PaperTradingEngine:
                 "confidence": res.confidence, "raw_prob": res.raw_prob,
                 "regime_label": res.regime_label,
                 "changepoint_prob": res.changepoint_prob,
-                "features": res.features.as_dict(), "reasoning": reasoning,
+                "features": {**res.features.as_dict(),
+                            "_norm_snapshot": res.norm_snapshot},
+                "reasoning": reasoning,
                 "similar_trades": {
                     "n": len(retrieval.get("neighbors") or []),
                     "win_rate": retrieval.get("win_rate"),

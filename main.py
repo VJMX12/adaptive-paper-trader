@@ -194,7 +194,8 @@ class App:
             await self.db.record_shadow_setup({
                 "symbol": sym, "direction": d, "entry_price": res.price,
                 "entry_ms": int(snap.ts[-1]), "stop_loss": sl,
-                "take_profit": tp, "features": res.features.as_dict()})
+                "take_profit": tp, "features": {**res.features.as_dict(),
+                                                "_norm_snapshot": res.norm_snapshot}})
 
         # 2) resolve matured setups using this snapshot's OHLC path
         ts, hi, lo = snap.ts, snap.high, snap.low
@@ -211,9 +212,11 @@ class App:
                                       ts, hi, lo)
             if outcome is not None:
                 try:
+                    feats = json.loads(s["features"])
+                    norm_snap = feats.pop("_norm_snapshot", None)
                     self.engine.learn_from_shadow(
-                        json.loads(s["features"]), s["direction"], bool(outcome),
-                        symbol=sym)
+                        feats, s["direction"], bool(outcome),
+                        symbol=sym, norm_snapshot=norm_snap)
                 except Exception as e:
                     log.error("shadow_learn_failed", id=s["id"], error=str(e))
                 await self.db.resolve_shadow_setup(s["id"], 1, outcome)
@@ -349,9 +352,11 @@ class App:
         #    raised, this outcome would be lost from the model forever.
         try:
             feats = _json.loads(trade["features"])
+            norm_snap = feats.pop("_norm_snapshot", None)
             self.engine.learn_from_trade(
                 feats, trade["direction"], won, float(trade["confidence"]),
-                exit_reason=trade.get("exit_reason"), symbol=trade.get("symbol"))
+                exit_reason=trade.get("exit_reason"), symbol=trade.get("symbol"),
+                norm_snapshot=norm_snap)
             save_learner_state(LEARNER_STATE_PATH, self.model, self.calibration)
         except Exception as e:
             log.error("learning_update_failed", trade_id=trade.get("id"),

@@ -113,7 +113,13 @@ learner:
   cold_start_handover: 80       # #updates before fully trusting the model over
                                  # the drift prior (was hardcoded 150) -- trust
                                  # its own read sooner as it accumulates trades.
-  changepoint_lr_boost: 3.0
+  changepoint_lr_boost: 1.0
+  # was 3.0 (up to 4x lr at high changepoint prob) — dialed back because that
+  # multiplier hit hardest exactly when the feature normalizer was least
+  # stable (see the norm_snapshot fix in app/analysis/model.py), amplifying
+  # noisy weight updates right when they were least trustworthy. Revisit
+  # upward once calibration (dashboard /metrics confidence_calibration) shows
+  # stated confidence tracking actual win rate again.
   # NEW: concept-drift adaptation. Effective lr for a symbol becomes
   # lr * (1 + changepoint_lr_boost * P(changepoint)) at the moment of
   # learning, so right after a real regime shift the model snaps to the new

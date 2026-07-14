@@ -71,14 +71,40 @@ class OnlineLogistic:
         s = float(self.w @ z + self.b)
         return float(1.0 / (1.0 + np.exp(-np.clip(s, -30, 30))))
 
-    def update(self, x: np.ndarray, y: int, lr_mult: float = 1.0) -> None:
+    def snapshot_norm(self) -> dict:
+        """Freeze the current normalizer state so a feature vector can be
+        re-scored LATER (at learn time) exactly as it was scored NOW (at
+        predict time) — the normalizer keeps drifting between the two (it
+        advances on every analysis cycle, for every symbol), so without this
+        the model would fit weights against a different feature scale than
+        the one that produced the confidence it's being trained against."""
+        return {"mean": self.mean.tolist(), "var": self.var.tolist(),
+                "count": self.count}
+
+    def _normalize_frozen(self, x: np.ndarray, norm: dict) -> np.ndarray:
+        x = np.asarray(x, dtype=float)
+        mean = np.array(norm["mean"], dtype=float)
+        var = np.array(norm["var"], dtype=float)
+        if norm.get("count", 0) > 1:
+            return (x - mean) / np.maximum(np.sqrt(var), EPS)
+        return x - mean
+
+    def update(self, x: np.ndarray, y: int, lr_mult: float = 1.0,
+               norm: dict | None = None) -> None:
         # Stats already advance in observe() on every analysis; do NOT advance
         # them again here (that would double-count and bias toward closed trades).
         # lr_mult lets the caller speed up learning right after a detected
         # changepoint (see AnalysisEngine.cp_lr_boost) without permanently
         # raising the base rate, which would just make normal-regime learning
         # noisier.
-        z = self._normalize(x, update_stats=False)
+        # `norm`, when given, is a snapshot from snapshot_norm() taken at the
+        # moment this x was originally scored (predict_proba time). Using it
+        # here instead of the current (drifted) self.mean/self.var keeps
+        # training aligned with the confidence that was actually reported —
+        # without it, entry-time confidence and close-time learning silently
+        # disagree about what the feature values even mean.
+        z = (self._normalize_frozen(x, norm) if norm is not None
+             else self._normalize(x, update_stats=False))
         p = 1.0 / (1.0 + np.exp(-np.clip(float(self.w @ z + self.b), -30, 30)))
         g = p - float(y)
         lr = self.lr * lr_mult
