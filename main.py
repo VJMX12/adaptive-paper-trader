@@ -74,6 +74,11 @@ class App:
         self.feed = ActivityFeed()
         self._stop = asyncio.Event()
         self._analysis_count: dict[str, int] = {}
+        # Single running counter of ALL engine "work units" -- analyze()
+        # cycles plus shadow-label resolutions -- for the dashboard heartbeat.
+        # Broader than analysis cycles alone so the chart reflects the engine
+        # actually doing things, not just one specific loop.
+        self._activity_count = 0
         self._shadow_enabled = bool(self.cfg.get("shadow.enabled", True))
         self._shadow_horizon_ms = float(
             self.cfg.get("shadow.horizon_hours", 48)) * 3600_000.0
@@ -142,11 +147,12 @@ class App:
 
                     # shadow labels: record this setup + resolve matured ones
                     if self._shadow_enabled:
-                        await self._process_shadows(snap, res)
+                        self._activity_count += await self._process_shadows(snap, res)
 
                     # notify analysis (every Nth cycle to avoid spam, always on rec)
                     c = self._analysis_count.get(symbol, 0) + 1
                     self._analysis_count[symbol] = c
+                    self._activity_count += 1
                     if res.trade_recommended or c % 12 == 1:
                         await self.tg.analysis_update(res, reasoning)
 
@@ -175,10 +181,13 @@ class App:
                 log.error("analyzer_error", symbol=symbol, error=str(e), exc_info=True)
             await _wait(self._stop, interval)
 
-    async def _process_shadows(self, snap, res) -> None:
+    async def _process_shadows(self, snap, res) -> int:
         """Record the current setup as a shadow label, then resolve any matured
         shadow setups for this symbol against the forward price path (did TP hit
-        before SL?) and train the learner on the clean barrier outcome."""
+        before SL?) and train the learner on the clean barrier outcome.
+
+        Returns the number of shadow setups resolved this call, so the caller
+        can fold it into the engine activity counter (dashboard heartbeat)."""
         sym = snap.symbol
         # 1) record the current setup (guard degenerate geometry). Only take one
         # shadow sample per regime-run per symbol: regime.sticky implies a regime
@@ -242,6 +251,7 @@ class App:
                     f"💾 Progress saved — everything learned "
                     f"({self.model.n_updates:,} lessons) is now safe on disk."))
             log.info("shadow_resolved", symbol=sym, learned=learned)
+        return learned
 
     async def _mirror_open(self, t: dict, res) -> None:
         """Mirror a paper open onto Bybit. When live, persist the order state
@@ -429,7 +439,7 @@ class App:
                     "model": self.model.snapshot(FeatureVector.names()),
                     "calibration": self.calibration.snapshot(),
                 },
-                cycle_count_provider=lambda: sum(self._analysis_count.values()),
+                cycle_count_provider=lambda: self._activity_count,
                 cfg=self.cfg, feed=self.feed,
                 info={
                     "mode": mode,

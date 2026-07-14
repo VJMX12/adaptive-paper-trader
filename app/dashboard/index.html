@@ -435,7 +435,7 @@ function renderHeartbeat(){
   $("#heartbeat").innerHTML =
     `<svg viewBox="0 0 ${W} ${H}" width="100%" height="${H}" preserveAspectRatio="none">${bars}</svg>
      <div style="color:var(--ink3);font-size:11px;margin-top:4px">
-       ${_lastCycleCount!=null? _lastCycleCount.toLocaleString()+" total analysis cycles":"—"}
+       ${_lastCycleCount!=null? _lastCycleCount.toLocaleString()+" total engine work units (analysis + shadow-label learning + validation refresh)":"—"}
        · ~${perMin}/min over last ${Math.round(secs)}s
        ${!CYCLE_HIST.slice(-10).some(x=>x.d>0)? ' · <span style="color:var(--warn)">no new cycles in last 10s — engine may be busy or stalled</span>' : ''}
      </div>`;

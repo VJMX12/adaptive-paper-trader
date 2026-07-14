@@ -177,11 +177,11 @@ def build_app(db: Database, starting_equity: float,
             payload["shadow"] = await db.shadow_counts()
         except Exception:
             pass
-        if cycle_count_provider is not None:
-            try:
-                payload["cycle_count"] = cycle_count_provider()
-            except Exception:
-                pass
+        try:
+            engine_count = cycle_count_provider() if cycle_count_provider else 0
+            payload["cycle_count"] = engine_count + validation_cache["refresh_count"]
+        except Exception:
+            pass
         if feed is not None:
             try:
                 after = int(req.query.get("ev_after", 0))
@@ -200,7 +200,7 @@ def build_app(db: Database, starting_equity: float,
             pass
         return web.json_response(snap, dumps=_dumps)
 
-    validation_cache: dict = {"result": None, "computed_at": 0.0}
+    validation_cache: dict = {"result": None, "computed_at": 0.0, "refresh_count": 0}
 
     async def _recompute_validation():
         trades = await db.get_closed_trades(limit=100000)
@@ -210,6 +210,7 @@ def build_app(db: Database, starting_equity: float,
         result["refresh_interval_secs"] = VALIDATION_REFRESH_SECS
         validation_cache["result"] = result
         validation_cache["computed_at"] = result["computed_at"]
+        validation_cache["refresh_count"] += 1
         return result
 
     async def _validation_refresh_loop():
