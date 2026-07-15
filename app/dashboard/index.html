@@ -67,6 +67,14 @@ tr:hover td{background:var(--panel2)}
 .reason{white-space:normal;color:var(--ink2);font-size:11.5px;max-width:560px}
 footer{margin-top:14px;color:var(--ink3);font-size:11px;display:flex;gap:14px;flex-wrap:wrap}
 .scroll{overflow-x:auto}
+#mswrap{position:relative}
+#mstip{position:absolute;display:none;background:var(--panel2);border:1px solid var(--line);border-radius:6px;padding:8px 11px;font-size:11.5px;pointer-events:none;max-width:260px;white-space:normal;z-index:5}
+.star{cursor:pointer}
+.star .core{transition:r .15s ease, opacity .15s ease}
+.star.locked .core{opacity:.35}
+.star.hit:hover .core{opacity:1}
+.mslabel{font-size:9.5px;letter-spacing:.04em;fill:var(--ink3)}
+.star.hit .mslabel{fill:var(--ink2)}
 </style></head><body>
 
 <header>
@@ -97,6 +105,11 @@ footer{margin-top:14px;color:var(--ink3);font-size:11px;display:flex;gap:14px;fl
 <div class="card" style="margin-top:12px">
   <h2>Equity — paper account (USD)</h2>
   <div id="wrap"><div id="tip"></div><div id="chart" class="scroll"><div class="empty">no equity history yet</div></div></div>
+</div>
+
+<div class="card" style="margin-top:12px">
+  <h2>Milestones — the journey so far</h2>
+  <div id="mswrap"><div id="mstip"></div><div id="constellation" class="scroll"><div class="empty">waiting for enough history to plot the first stars…</div></div></div>
 </div>
 
 <div class="chips" id="chips"></div>
@@ -487,6 +500,96 @@ function renderShadow(){
      <div style="margin-top:6px;font-size:11px;color:var(--ink2)">Every analysis logs the model's preferred setup; each is resolved against the forward price path (TP-before-SL) to train the learner — far beyond the rare live fills.</div>`;
 }
 
+// Milestones: derived client-side from equity curve + trades + validation,
+// nothing new to persist server-side. Fixed scatter layout (not random) so
+// the shape is stable across renders; stars light up and connect in the
+// chronological order they were actually reached.
+const MS_DEFS = [
+  {id:"first_trade", x:6, y:70, label:"First trade", target(m){ return "1 closed trade"; },
+   check(m,curve,trades){ if(!trades.length) return null;
+     const t=[...trades].sort((a,b)=>new Date(a.exit_ts)-new Date(b.exit_ts))[0];
+     return {ts:t.exit_ts, detail:`${shortSym(t.symbol)} ${t.direction} closed for ${usd(t.pnl_usd)}`}; }},
+  {id:"ten_trades", x:18, y:40, label:"10 trades logged", target(){ return "10 closed trades"; },
+   check(m,curve,trades){ if(trades.length<10) return null;
+     const t=[...trades].sort((a,b)=>new Date(a.exit_ts)-new Date(b.exit_ts))[9];
+     return {ts:t.exit_ts, detail:"10th closed trade — enough history for real stats"}; }},
+  {id:"hundred_trades", x:32, y:66, label:"100 trades logged", target(){ return "100 closed trades"; },
+   check(m,curve,trades){ if(trades.length<100) return null;
+     const t=[...trades].sort((a,b)=>new Date(a.exit_ts)-new Date(b.exit_ts))[99];
+     return {ts:t.exit_ts, detail:"100th closed trade"}; }},
+  {id:"streak5", x:46, y:30, label:"5-win streak", target(){ return "5 wins in a row"; },
+   check(m,curve,trades){ if(!trades.length) return null;
+     const sorted=[...trades].sort((a,b)=>new Date(a.exit_ts)-new Date(b.exit_ts));
+     let run=0, best=0, at=null;
+     for(const t of sorted){ if(t.pnl_usd>0){ run++; if(run>best){best=run; at=t.exit_ts;} } else run=0; }
+     if(best<5) return null;
+     return {ts:at, detail:`${best}-trade winning streak`}; }},
+  {id:"eq5", x:60, y:58, label:"+5% equity", target(m){ return `equity ≥ ${usd((m?.starting_equity||0)*1.05)}`; },
+   check(m,curve){ return eqMilestone(m,curve,1.05,"+5%"); }},
+  {id:"eq10", x:20, y:16, label:"+10% equity", target(m){ return `equity ≥ ${usd((m?.starting_equity||0)*1.10)}`; },
+   check(m,curve){ return eqMilestone(m,curve,1.10,"+10%"); }},
+  {id:"edge", x:74, y:34, label:"Positive edge", target(){ return "profit factor > 1.0 over all closed trades"; },
+   check(m){ if(!(m?.profit_factor>1) || !m?.n_trades) return null;
+     return {ts:null, detail:`profit factor ${num(m.profit_factor)} across ${m.n_trades} trades`}; }},
+  {id:"validated", x:86, y:60, label:"Edge validated", target(){ return "walk-forward out-of-sample checks pass"; },
+   check(m,curve,trades,val){ const ev=val?.edge_validation; if(!ev?.overall_pass) return null;
+     return {ts:val.computed_at?val.computed_at*1000:null, detail: ev.status||"walk-forward validation passed"}; }},
+  {id:"eq30", x:92, y:22, label:"+30% equity", target(m){ return `equity ≥ ${usd((m?.starting_equity||0)*1.30)}`; },
+   check(m,curve){ return eqMilestone(m,curve,1.30,"+30%"); }},
+];
+function eqMilestone(m, curve, mult, label){
+  if(!m || !curve || !curve.length) return null;
+  const base = m.starting_equity, target = base*mult;
+  const hit = curve.find(p=>p.equity>=target);
+  if(!hit) return null;
+  return {ts:hit.ts, detail:`equity crossed ${usd(target)} (${label} from ${usd(base)} start)`};
+}
+let VALIDATION = null;
+function renderMilestones(){
+  const m = STATE.metrics; if(!m) return;
+  const rows = MS_DEFS.map(def=>{
+    const hit = def.check(m, CURVE, STATE.trades||[], VALIDATION);
+    return {...def, hit};
+  });
+  const achieved = rows.filter(r=>r.hit).sort((a,b)=>{
+    const ta=a.hit.ts?+new Date(a.hit.ts):0, tb=b.hit.ts?+new Date(b.hit.ts):0; return ta-tb;
+  });
+  const W=1180,H=210;
+  const px=x=>x/100*W, py=y=>y/100*H;
+  const lines = achieved.slice(1).map((r,i)=>{
+    const prev=achieved[i];
+    return `<line x1="${px(prev.x)}" y1="${py(prev.y)}" x2="${px(r.x)}" y2="${py(r.y)}" stroke="var(--accent)" stroke-width="1" stroke-dasharray="2,3" opacity=".55"/>`;
+  }).join("");
+  const stars = rows.map(r=>{
+    const hit = !!r.hit;
+    const color = hit ? "var(--good)" : "var(--ink3)";
+    return `<g class="star ${hit?"hit":"locked"}" data-id="${r.id}">
+      ${hit?`<circle class="core" cx="${px(r.x)}" cy="${py(r.y)}" r="9" fill="none" stroke="${color}" stroke-width="1" opacity=".4"/>`:""}
+      <circle class="core" cx="${px(r.x)}" cy="${py(r.y)}" r="${hit?5:4}" fill="${color}"/>
+      <text class="mslabel" x="${px(r.x)}" y="${py(r.y)+18}" text-anchor="middle">${esc(r.label)}</text>
+    </g>`;
+  }).join("");
+  $("#constellation").innerHTML =
+    `<svg id="mssvg" viewBox="0 0 ${W} ${H}" width="100%" height="${H}" style="min-width:640px">
+      ${lines}${stars}
+    </svg>
+    <div style="margin-top:8px;font-size:11px;color:var(--ink3)">${achieved.length} of ${rows.length} milestones reached</div>`;
+  const svg = $("#mssvg"), tip = $("#mstip"), wrap = $("#mswrap");
+  svg.querySelectorAll(".star").forEach(g=>{
+    const r = rows.find(x=>x.id===g.dataset.id);
+    g.addEventListener("mousemove", e=>{
+      tip.style.display="block";
+      tip.innerHTML = r.hit
+        ? `<b style="color:var(--good)">★ ${esc(r.label)}</b><br>${esc(r.hit.detail)}${r.hit.ts?`<br><span style="color:var(--ink3)">${esc(new Date(r.hit.ts).toLocaleString())}</span>`:""}`
+        : `<b style="color:var(--ink3)">☆ ${esc(r.label)}</b><br><span style="color:var(--ink3)">not yet — needs ${esc(r.target(STATE.metrics))}</span>`;
+      const wr = wrap.getBoundingClientRect();
+      tip.style.left = Math.min(e.clientX-wr.left+14, wr.width-270)+"px";
+      tip.style.top = Math.max(0, e.clientY-wr.top-14)+"px";
+    });
+    g.addEventListener("mouseleave", ()=>{ tip.style.display="none"; });
+  });
+}
+
 function renderLight(){
   // cheap per-second updates: equity hero, open count, clock, positions, shadow
   const m = STATE.metrics;
@@ -513,6 +616,7 @@ function renderHeavy(){
   renderLearner(STATE.learner);
   renderAnalyses(STATE.analyses, (m.system||{}).min_confidence ?? .6);
   renderPnlRange(m);
+  renderMilestones();
 }
 
 const PNL_RANGE_LABEL = {today:"today", this_week:"this week", last_week:"last week",
@@ -556,6 +660,7 @@ function applyPayload(p){
 }
 
 function renderValidation(v){
+  VALIDATION = v;
   const ev = v.edge_validation||{}, om = v.overall_metrics||{};
   let banner, bcol;
   if(ev.insufficient_data){ banner="⏳ COLLECTING DATA"; bcol="var(--warn)"; }
