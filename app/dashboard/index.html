@@ -116,7 +116,7 @@ footer{margin-top:14px;color:var(--ink3);font-size:11px;display:flex;gap:14px;fl
 
 <div class="grid cols" style="margin-top:12px">
   <div class="card">
-    <h2>Open positions <span id="npos" style="color:var(--accent)"></span></h2>
+    <h2>Open positions <span id="npos" style="color:var(--accent)"></span> <span id="inplay" style="color:var(--ink2);font-weight:400;text-transform:none;letter-spacing:0"></span></h2>
     <div class="scroll" id="positions"><div class="empty">none — engine is waiting for an earned edge</div></div>
   </div>
   <div class="card">
@@ -204,7 +204,8 @@ function renderTiles(m){
     + tile("Max drawdown", m.max_drawdown_pct!=null?num(m.max_drawdown_pct)+"%":"—", m.max_drawdown_pct>10?"wrn":"")
     + tile("Sharpe/trade", num(m.sharpe_per_trade))
     + tile("Brier score", num(m.brier_score,3), "", "lower = honest confidence")
-    + tile("Open", `${m.open_positions}`,"", "positions");
+    + tile("Capital in play", usd(STATE.positions.reduce((s,t)=> s + (t.position_size||0)*(t.entry_price||0), 0)),
+           "", `${m.open_positions} open position${m.open_positions===1?"":"s"}`);
 }
 
 function renderSys(m){
@@ -267,6 +268,8 @@ function meter(v, thr, warn){
 function renderPositions(rows){
   rows = rows.filter(fsym);
   $("#npos").textContent = rows.length? `· ${rows.length}` : "";
+  const inPlay = rows.reduce((s,t)=> s + (t.position_size||0)*(t.entry_price||0), 0);
+  $("#inplay").textContent = rows.length? `· ${usd(inPlay)} committed` : "";
   if(!rows.length){ $("#positions").innerHTML=`<div class="empty">none — engine is waiting for an earned edge</div>`; return; }
   $("#positions").innerHTML = `<table><tr><th>#</th><th>sym</th><th>dir</th><th>entry</th><th>SL</th><th>TP</th><th>size</th><th>conf</th><th>age</th><th>MAE/MFE</th></tr>`+
     rows.map(t=>{const d=t.direction==="short"?"short":"long"; return `<tr><td>${num(t.id,0)}</td><td>${shortSym(t.symbol)}</td>
