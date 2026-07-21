@@ -11,14 +11,39 @@
   --glow:0 0 12px rgba(57,135,229,.25);
 }
 *{box-sizing:border-box;margin:0;padding:0}
+html{-webkit-text-size-adjust:100%;text-size-adjust:100%}
 body{background:var(--bg);color:var(--ink);font:14px/1.5 ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;padding:18px;max-width:1280px;margin:auto}
-h1{font-size:16px;letter-spacing:.22em;font-weight:600}
+h1{font-size:clamp(13px,3.6vw,16px);letter-spacing:.18em;font-weight:600}
 h2{font-size:11px;letter-spacing:.18em;color:var(--ink2);text-transform:uppercase;margin-bottom:10px}
 a{color:var(--accent);text-decoration:none}
 header{display:flex;flex-wrap:wrap;gap:12px;align-items:center;justify-content:space-between;
   border:1px solid var(--line);border-radius:10px;padding:14px 18px;background:
   linear-gradient(90deg,rgba(57,135,229,.08),transparent 40%),var(--panel);box-shadow:var(--glow)}
 .sys{display:flex;gap:16px;flex-wrap:wrap;color:var(--ink2);font-size:12px}
+/* ---------- responsive: tablet & phone ---------- */
+@media(max-width:760px){
+  body{padding:12px 10px}
+  header{padding:12px 14px;gap:10px}
+  .sys{gap:10px;font-size:11px}
+  .grid{gap:9px}
+  .card{padding:12px}
+  .tile{padding:10px 11px}
+  .tile .v{font-size:17px}
+  .tile.hero .v{font-size:24px}
+}
+@media(max-width:480px){
+  body{padding:9px 8px;font-size:13px}
+  h1{letter-spacing:.12em}
+  .tiles{grid-template-columns:repeat(auto-fit,minmax(112px,1fr))}
+  .tile .k{font-size:9px}
+  .tile .v{font-size:15px}
+  .tile.hero .v{font-size:21px}
+  table{font-size:11px}
+  th,td{padding:5px 6px}
+  select,input,button{font-size:16px !important} /* stop iOS auto-zoom on focus */
+  .chip{padding:4px 10px}
+  footer{font-size:10px}
+}
 .sys b{color:var(--ink);font-weight:600}
 .badge{padding:3px 10px;border-radius:999px;font-size:11px;letter-spacing:.12em;border:1px solid}
 .badge.dry{color:var(--warn);border-color:var(--warn);animation:pulse 2.2s infinite}
@@ -76,7 +101,18 @@ footer{margin-top:14px;color:var(--ink3);font-size:11px;display:flex;gap:14px;fl
 .star.hit:hover .core{opacity:1}
 .mslabel{font-size:9.5px;letter-spacing:.04em;fill:var(--ink3)}
 .star.hit .mslabel{fill:var(--ink2)}
+#ministat{position:fixed;top:0;left:0;right:0;z-index:50;display:flex;align-items:center;
+  justify-content:space-between;gap:10px;padding:9px 14px;background:var(--panel);
+  border-bottom:1px solid var(--line);box-shadow:0 4px 16px rgba(0,0,0,.4);font-size:12px;
+  transform:translateY(-100%);opacity:0;transition:transform .22s ease,opacity .22s ease;cursor:pointer}
+#ministat.show{transform:translateY(0);opacity:1}
+#ministat .msleft{display:flex;align-items:center;gap:8px;min-width:0}
+#ministat .msleft b{font-size:13px;font-variant-numeric:tabular-nums}
+#ministat .msright{display:flex;align-items:center;gap:10px;color:var(--ink2);white-space:nowrap}
+@media(min-width:761px){#ministat{display:none !important}}
 </style></head><body>
+
+<div id="ministat" onclick="window.scrollTo({top:0,behavior:'smooth'})"></div>
 
 <header>
   <div>
@@ -212,7 +248,23 @@ function renderTiles(m){
     + tile("Brier score", num(m.brier_score,3), "", "lower = honest confidence")
     + tile("Capital in play", usd(STATE.positions.reduce((s,t)=> s + (t.position_size||0)*(t.entry_price||0), 0)),
            "", `${m.open_positions} open position${m.open_positions===1?"":"s"}`);
+  renderMiniStat(m);
 }
+
+function renderMiniStat(m){
+  const d = m.equity - m.starting_equity;
+  const live = (m.system||{}).live;
+  $("#ministat").innerHTML =
+    `<div class="msleft"><span class="dot" style="background:${live?"var(--good)":"var(--warn)"}"></span>`+
+    `<b>${usd(m.equity)}</b><span class="${sign(d)}" style="font-size:11px">${d>=0?"▲":"▼"} ${pct(d/m.starting_equity)}</span></div>`+
+    `<div class="msright"><span>${m.open_positions||0} open</span>`+
+    `<span class="badge ${live?"live":"dry"}" style="font-size:9px;padding:2px 7px">${live?"LIVE":"DRY-RUN"}</span></div>`;
+}
+window.addEventListener("scroll", ()=>{
+  const el = $("#ministat");
+  const shouldShow = window.innerWidth<=760 && window.scrollY>160;
+  el.classList.toggle("show", shouldShow);
+}, {passive:true});
 
 function renderSys(m){
   const s = m.system||{};
