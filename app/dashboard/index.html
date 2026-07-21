@@ -36,8 +36,9 @@ header{display:flex;flex-wrap:wrap;gap:12px;align-items:center;justify-content:s
   h1{letter-spacing:.12em}
   .tiles{grid-template-columns:repeat(auto-fit,minmax(112px,1fr))}
   .tile .k{font-size:9px}
-  .tile .v{font-size:15px}
-  .tile.hero .v{font-size:21px}
+  .tile .v{font-size:15px;word-break:break-word}
+  .tile.hero{grid-column:1/-1}        /* equity gets the full row so it never crowds a neighbor */
+  .tile.hero .v{font-size:clamp(18px,7vw,26px)}
   table{font-size:11px}
   th,td{padding:5px 6px}
   select,input,button{font-size:16px !important} /* stop iOS auto-zoom on focus */
@@ -52,7 +53,7 @@ header{display:flex;flex-wrap:wrap;gap:12px;align-items:center;justify-content:s
 @keyframes pulse{50%{opacity:.35}}
 .grid{display:grid;gap:12px;margin-top:12px}
 .tiles{grid-template-columns:repeat(auto-fit,minmax(140px,1fr))}
-.tile{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:12px 14px;position:relative;overflow:hidden}
+.tile{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:12px 14px;position:relative;overflow:hidden;min-width:0}
 .tile::before{content:"";position:absolute;top:0;left:0;width:26px;height:2px;background:var(--accent);opacity:.7}
 .tile .k{font-size:10px;letter-spacing:.16em;color:var(--ink3);text-transform:uppercase}
 .tile .v{font-size:20px;font-weight:700;margin-top:4px;font-variant-numeric:tabular-nums}
