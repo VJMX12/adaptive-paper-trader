@@ -57,6 +57,7 @@ tr:hover td{background:var(--panel2)}
 .msg.open{border-left:2px solid var(--good)}
 .msg.close{border-left:2px solid var(--warn)}
 .msg.veto,.msg.skip{border-left:2px solid var(--ink3)}
+.msg.milestone{border-left:2px solid var(--accent);background:color-mix(in srgb, var(--accent) 8%, var(--panel2))}
 @keyframes msgin{from{opacity:0;transform:translateY(4px)}to{opacity:1;transform:none}}
 .chips{display:flex;gap:8px;margin:12px 0 0;flex-wrap:wrap;align-items:center}
 .chips select{background:var(--panel);color:var(--ink);border:1px solid var(--line);border-radius:6px;padding:4px 8px;font:inherit;font-size:12px}
@@ -110,6 +111,11 @@ footer{margin-top:14px;color:var(--ink3);font-size:11px;display:flex;gap:14px;fl
 <div class="card" style="margin-top:12px">
   <h2>Milestones — the journey so far</h2>
   <div id="mswrap"><div id="mstip"></div><div id="constellation" class="scroll"><div class="empty">waiting for enough history to plot the first stars…</div></div></div>
+</div>
+
+<div class="card" style="margin-top:12px">
+  <h2>Learning phases — per symbol</h2>
+  <div id="phasesgrid" class="scroll"><div class="empty">no learning history yet</div></div>
 </div>
 
 <div class="chips" id="chips"></div>
@@ -699,6 +705,23 @@ async function validationTick(force){
   try{ renderValidation(await fetch("/validation"+(force?"?refresh=1":"")).then(r=>r.json())); }catch(e){}
 }
 
+function renderPhases(p){
+  const rows = p.symbols||[];
+  if(!rows.length){ $("#phasesgrid").innerHTML = `<div class="empty">no learning history yet</div>`; return; }
+  const items = rows.map(r=>{
+    const active = r.phase>0;
+    return `<div class="tile" style="min-width:150px">
+      <div class="k">${esc(shortSym(r.symbol))}</div>
+      <div class="v" style="font-size:20px;letter-spacing:3px;color:${active?"var(--good)":"var(--ink3)"}">${esc(r.dots)}</div>
+      <div class="s">${r.emoji?esc(r.emoji)+" ":""}${esc(r.label)} · ${r.resolved_count.toLocaleString()} studied</div>
+    </div>`;
+  }).join("");
+  $("#phasesgrid").innerHTML = `<div class="chips" style="margin:0">${items}</div>`;
+}
+async function phasesTick(){
+  try{ renderPhases(await fetch("/learning_phases").then(r=>r.json())); }catch(e){}
+}
+
 // Two-tier polling: a cheap /live payload every 1s (equity, open, positions)
 // for lag-free per-second liveness, and the heavy set every 8s. This streams
 // through any proxy (Railway buffers SSE), so updates never stall.
@@ -718,10 +741,11 @@ async function heavyTick(){
     applyPayload({metrics:m, trades:tr, analyses:an, equity_curve:eq, learner:L});
   }catch(e){ /* light tick keeps the clock honest */ }
 }
-async function boot(){ await heavyTick(); await lightTick(); validationTick(); }
+async function boot(){ await heavyTick(); await lightTick(); validationTick(); phasesTick(); }
 boot();
 setInterval(lightTick, 1000);      // per-second live updates
 setInterval(heavyTick, 8000);      // metrics / learner / tables / chart
+setInterval(phasesTick, 8000);     // per-symbol learning phase dots
 setInterval(validationTick, 30000); // walk-forward validation (heavier scan)
 window.addEventListener("resize", renderChart);
 </script>

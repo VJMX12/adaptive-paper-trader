@@ -107,6 +107,14 @@ CREATE TABLE IF NOT EXISTS shadow_setups (
     resolved INTEGER NOT NULL DEFAULT 0, -- 0 open, 1 resolved, 2 expired
     outcome INTEGER                      -- 1 tp-first, 0 sl-first
 );
+-- cumulative per-symbol learning progress (survives shadow_setups pruning,
+-- which caps that table's row count and would otherwise erase old history)
+CREATE TABLE IF NOT EXISTS symbol_learning (
+    symbol TEXT PRIMARY KEY,
+    resolved_count INTEGER NOT NULL DEFAULT 0,
+    phase INTEGER NOT NULL DEFAULT 0,
+    updated_ts TEXT NOT NULL
+);
 CREATE INDEX IF NOT EXISTS idx_trades_status ON trades(status);
 CREATE INDEX IF NOT EXISTS idx_trades_symbol ON trades(symbol);
 CREATE INDEX IF NOT EXISTS idx_analyses_symbol_ts ON analyses(symbol, ts);
@@ -391,6 +399,35 @@ class Database:
             " ORDER BY id DESC LIMIT ?)", (keep,))
         await self.db.commit()
         return cur.rowcount or 0
+
+    async def bump_symbol_learning(self, symbol: str, by: int) -> dict:
+        """Add `by` to symbol's cumulative resolved-shadow count and return the
+        updated {resolved_count, phase} row so the caller can detect a phase
+        crossing without a separate read."""
+        await self.db.execute(
+            """INSERT INTO symbol_learning (symbol, resolved_count, phase, updated_ts)
+               VALUES (?, ?, 0, ?)
+               ON CONFLICT(symbol) DO UPDATE SET
+                 resolved_count = resolved_count + excluded.resolved_count,
+                 updated_ts = excluded.updated_ts""",
+            (symbol, by, utcnow()))
+        await self.db.commit()
+        cur = await self.db.execute(
+            "SELECT resolved_count, phase FROM symbol_learning WHERE symbol=?",
+            (symbol,))
+        row = await cur.fetchone()
+        return {"resolved_count": row["resolved_count"], "phase": row["phase"]}
+
+    async def set_symbol_phase(self, symbol: str, phase: int) -> None:
+        await self.db.execute(
+            "UPDATE symbol_learning SET phase=? WHERE symbol=?", (phase, symbol))
+        await self.db.commit()
+
+    async def all_symbol_learning(self) -> list[dict]:
+        cur = await self.db.execute(
+            "SELECT symbol, resolved_count, phase, updated_ts FROM symbol_learning "
+            "ORDER BY resolved_count DESC")
+        return [dict(r) for r in await cur.fetchall()]
 
     async def shadow_counts(self) -> dict:
         cur = await self.db.execute(

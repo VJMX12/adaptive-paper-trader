@@ -26,6 +26,7 @@ from app.analysis.reasoning import analysis_reasoning
 from app.analysis.walkforward import resolve_barrier
 from app.config import load_config
 from app.dashboard.feed import ActivityFeed
+from app.dashboard.learning_phases import dots, phase_for_count, phase_info
 from app.dashboard.server import start_dashboard
 from app.data.collector import MarketDataCollector
 from app.db.database import Database
@@ -251,6 +252,7 @@ class App:
                 f"did — {tp_hits} would have hit take-profit, "
                 f"{learned - tp_hits} the stop. Lessons learned so far: "
                 f"{self.model.n_updates:,}."), sym)
+            await self._check_learning_phase(sym, learned)
             self._shadow_since_save += learned
             if self._shadow_since_save >= 20:   # persist learner periodically
                 save_learner_state(LEARNER_STATE_PATH, self.model, self.calibration)
@@ -262,6 +264,21 @@ class App:
                     f"({self.model.n_updates:,} lessons) is now safe on disk."))
             log.info("shadow_resolved", symbol=sym, learned=learned)
         return learned
+
+    async def _check_learning_phase(self, sym: str, resolved_this_call: int) -> None:
+        """Advance and announce this symbol's learning phase (see
+        app/dashboard/learning_phases.py) when its cumulative resolved-shadow
+        count crosses a threshold. One announcement per phase, ever — the
+        counter is persisted so pruning shadow_setups can't re-trigger it."""
+        row = await self.db.bump_symbol_learning(sym, resolved_this_call)
+        new_phase = phase_for_count(row["resolved_count"])
+        if new_phase > row["phase"]:
+            await self.db.set_symbol_phase(sym, new_phase)
+            emoji, label = phase_info(new_phase)
+            self.feed.say("milestone", (
+                f"{emoji} {_short(sym)} reached learning phase {new_phase}/3 "
+                f"— {label} {dots(new_phase)} "
+                f"({row['resolved_count']:,} outcomes studied so far)"), sym)
 
     async def _mirror_open(self, t: dict, res) -> None:
         """Mirror a paper open onto Bybit. When live, persist the order state

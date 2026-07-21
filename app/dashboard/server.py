@@ -29,6 +29,7 @@ from pathlib import Path
 from aiohttp import web
 
 from app.analysis.walkforward import run_walk_forward
+from app.dashboard.learning_phases import TOTAL_PHASES, dots, phase_info
 from app.dashboard.metrics import compute_metrics
 from app.db.database import Database
 from app.logging_setup import get_logger
@@ -200,6 +201,16 @@ def build_app(db: Database, starting_equity: float,
             pass
         return web.json_response(snap, dumps=_dumps)
 
+    async def learning_phases(_req):
+        """Per-symbol learning progress (phase 0-3, dot display) — see
+        app/dashboard/learning_phases.py for thresholds."""
+        rows = await db.all_symbol_learning()
+        for r in rows:
+            r["dots"] = dots(r["phase"])
+            r["emoji"], r["label"] = phase_info(r["phase"])
+        return web.json_response({"symbols": rows, "total_phases": TOTAL_PHASES},
+                                 dumps=_dumps)
+
     validation_cache: dict = {"result": None, "computed_at": 0.0, "refresh_count": 0}
 
     async def _recompute_validation():
@@ -300,6 +311,7 @@ def build_app(db: Database, starting_equity: float,
     app.router.add_get("/equity", equity)
     app.router.add_get("/live", live)
     app.router.add_get("/learner", learner)
+    app.router.add_get("/learning_phases", learning_phases)
     app.router.add_get("/validation", validation)
     app.router.add_get("/stream", stream)
     app.router.add_get("/export/trades.csv", trades_csv)
