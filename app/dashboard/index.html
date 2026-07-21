@@ -12,7 +12,21 @@
 }
 *{box-sizing:border-box;margin:0;padding:0}
 html{-webkit-text-size-adjust:100%;text-size-adjust:100%}
-body{background:var(--bg);color:var(--ink);font:14px/1.5 ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;padding:18px;max-width:1280px;margin:auto}
+body{background:var(--bg);color:var(--ink);font:14px/1.5 ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;padding:18px;max-width:1280px;margin:auto;position:relative}
+/* ambient command-deck atmosphere: a faint grid + slow-drifting glow behind
+   everything. Fixed + pointer-events:none so it never interferes with layout
+   or interaction — pure mood, no functional weight. */
+body::before{content:"";position:fixed;inset:0;z-index:-2;pointer-events:none;
+  background-image:
+    linear-gradient(rgba(255,255,255,.025) 1px,transparent 1px),
+    linear-gradient(90deg,rgba(255,255,255,.025) 1px,transparent 1px);
+  background-size:38px 38px;
+  mask-image:radial-gradient(ellipse 85% 65% at 50% 0%,#000 40%,transparent 88%)}
+body::after{content:"";position:fixed;z-index:-1;pointer-events:none;top:-30vh;left:50%;
+  width:140vw;height:70vh;transform:translateX(-50%);
+  background:radial-gradient(closest-side,rgba(57,135,229,.10),transparent 70%);
+  animation:driftglow 16s ease-in-out infinite}
+@keyframes driftglow{0%,100%{opacity:.7;transform:translateX(-52%) translateY(0)}50%{opacity:1;transform:translateX(-48%) translateY(2vh)}}
 h1{font-size:clamp(13px,3.6vw,16px);letter-spacing:.18em;font-weight:600}
 h2{font-size:11px;letter-spacing:.18em;color:var(--ink2);text-transform:uppercase;margin-bottom:10px}
 a{color:var(--accent);text-decoration:none}
@@ -58,16 +72,23 @@ header{display:flex;flex-wrap:wrap;gap:12px;align-items:center;justify-content:s
 .tile .k{font-size:10px;letter-spacing:.16em;color:var(--ink3);text-transform:uppercase}
 .tile .v{font-size:20px;font-weight:700;margin-top:4px;font-variant-numeric:tabular-nums}
 .tile .s{font-size:11px;color:var(--ink2)}
-.tile.hero .v{font-size:30px}
+.tile.hero .v{font-size:30px;text-shadow:0 0 18px rgba(57,135,229,.35)}
+.tile.hero.pos{box-shadow:inset 0 0 0 1px rgba(12,163,12,.18),0 0 26px rgba(12,163,12,.12)}
+.tile.hero.neg{box-shadow:inset 0 0 0 1px rgba(236,131,90,.18),0 0 26px rgba(236,131,90,.1)}
+.tile.hero.pos .v{text-shadow:0 0 18px rgba(12,163,12,.3)}
+.tile.hero.neg .v{text-shadow:0 0 18px rgba(236,131,90,.28)}
 .tile:hover{border-color:color-mix(in srgb, var(--accent) 45%, var(--line));
   box-shadow:0 6px 20px rgba(0,0,0,.28);transform:translateY(-1px);transition:all .18s ease}
 .pos{color:var(--good)}.neg{color:var(--bad)}.wrn{color:var(--warn)}
 .card{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:16px;
-  transition:border-color .18s ease,box-shadow .18s ease;position:relative;overflow:hidden}
+  transition:border-color .18s ease,box-shadow .18s ease,opacity .5s ease,transform .5s ease;
+  position:relative;overflow:hidden;opacity:0;transform:translateY(10px)}
 .card::before{content:"";position:absolute;top:0;left:0;right:0;height:2px;
   background:linear-gradient(90deg,var(--accent),transparent 65%);opacity:.55}
 .card:hover{border-color:color-mix(in srgb, var(--accent) 30%, var(--line));
   box-shadow:0 8px 28px rgba(0,0,0,.3)}
+.card.in-view{opacity:1;transform:none}
+@media(prefers-reduced-motion:reduce){.card{opacity:1;transform:none;transition:border-color .18s ease,box-shadow .18s ease}}
 .cols{grid-template-columns:1fr 1fr}
 @media(max-width:900px){.cols{grid-template-columns:1fr}}
 table{border-collapse:collapse;width:100%;font-size:12.5px}
@@ -130,14 +151,25 @@ body{padding-top:calc(var(--navh) + 18px)}
   box-shadow:0 6px 24px rgba(0,0,0,.35)}
 .navwrap{max-width:1280px;margin:auto;height:100%;padding:0 18px;display:flex;
   align-items:center;justify-content:space-between;gap:14px}
-.nav-brand{display:flex;align-items:center;gap:8px;font-size:12.5px;letter-spacing:.14em;
+.nav-brand{display:flex;align-items:center;gap:9px;font-size:12.5px;letter-spacing:.14em;
   font-weight:600;cursor:pointer;white-space:nowrap;flex-shrink:0}
-.nav-links{display:flex;gap:2px;flex-wrap:nowrap;overflow-x:auto;scrollbar-width:none}
+.nav-pulse{position:relative;width:9px;height:9px;border-radius:50%;background:var(--warn);
+  box-shadow:0 0 0 0 rgba(250,178,25,.6);animation:navpulse 2.4s ease-out infinite}
+.nav-pulse.live{background:var(--good);box-shadow:0 0 0 0 rgba(12,163,12,.6)}
+@keyframes navpulse{0%{box-shadow:0 0 0 0 currentColor,0 0 0 0 rgba(0,0,0,0)}
+  70%{box-shadow:0 0 0 6px transparent}100%{box-shadow:0 0 0 0 transparent}}
+.nav-links{display:flex;gap:2px;flex-wrap:nowrap;overflow-x:auto;scrollbar-width:none;position:relative}
 .nav-links::-webkit-scrollbar{display:none}
-.nav-links a{color:var(--ink2);font-size:11px;letter-spacing:.08em;text-transform:uppercase;
-  padding:7px 11px;border-radius:6px;white-space:nowrap;transition:color .15s ease,background-color .15s ease}
+.nav-links a{position:relative;color:var(--ink2);font-size:11px;letter-spacing:.06em;
+  padding:7px 11px;border-radius:6px;white-space:nowrap;display:flex;align-items:center;gap:5px;
+  transition:color .15s ease,background-color .15s ease}
+.nav-links a .ic{font-size:12px;opacity:.85}
 .nav-links a:hover{color:var(--ink);background:rgba(255,255,255,.04)}
-.nav-links a.active{color:var(--accent);background:rgba(57,135,229,.12)}
+.nav-links a.active{color:var(--accent)}
+.nav-indicator{position:absolute;bottom:2px;height:2px;background:var(--accent);border-radius:2px;
+  box-shadow:0 0 8px rgba(57,135,229,.7);transition:left .28s cubic-bezier(.4,0,.2,1),width .28s cubic-bezier(.4,0,.2,1);
+  opacity:0}
+.nav-indicator.show{opacity:1}
 .nav-stats{display:flex;align-items:center;gap:10px;flex-shrink:0;font-size:12px;font-variant-numeric:tabular-nums}
 .nav-toggle{display:none;background:none;border:1px solid var(--line);color:var(--ink);
   border-radius:6px;width:32px;height:32px;font-size:15px;cursor:pointer;flex-shrink:0}
@@ -158,12 +190,19 @@ body{padding-top:calc(var(--navh) + 18px)}
 
 <nav id="navbar"><div class="navwrap">
   <div class="nav-brand" onclick="window.scrollTo({top:0,behavior:'smooth'})">
-    <span class="dot"></span>ADAPTIVE TRADER
+    <span class="nav-pulse" id="navPulse"></span>ADAPTIVE TRADER
   </div>
   <div class="nav-links" id="navLinks">
-    <a href="#nav-chat">Chat</a><a href="#nav-equity">Equity</a><a href="#nav-milestones">Milestones</a>
-    <a href="#nav-phases">Learning</a><a href="#nav-positions">Positions</a><a href="#nav-trades">Trades</a>
-    <a href="#nav-pnl">PnL</a><a href="#nav-validation">Validation</a><a href="#nav-analyses">Analyses</a>
+    <a href="#nav-chat"><span class="ic">💬</span>Chat</a>
+    <a href="#nav-equity"><span class="ic">📈</span>Equity</a>
+    <a href="#nav-milestones"><span class="ic">🏆</span>Milestones</a>
+    <a href="#nav-phases"><span class="ic">🧠</span>Learning</a>
+    <a href="#nav-positions"><span class="ic">📍</span>Positions</a>
+    <a href="#nav-trades"><span class="ic">📜</span>Trades</a>
+    <a href="#nav-pnl"><span class="ic">💰</span>PnL</a>
+    <a href="#nav-validation"><span class="ic">🔬</span>Validation</a>
+    <a href="#nav-analyses"><span class="ic">🔎</span>Analyses</a>
+    <span class="nav-indicator" id="navIndicator"></span>
   </div>
   <div class="nav-stats">
     <span class="nav-sub" id="navEquity" style="font-weight:700">—</span>
@@ -295,7 +334,7 @@ function tile(k,v,cls="",s=""){ return `<div class="tile"><div class="k">${k}</d
 function renderTiles(m){
   const d = m.equity - m.starting_equity, dp = d/m.starting_equity;
   $("#tiles").innerHTML =
-    `<div class="tile hero"><div class="k">Equity</div><div class="v">${usd(m.equity)}</div>
+    `<div class="tile hero ${sign(d)}"><div class="k">Equity</div><div class="v">${usd(m.equity)}</div>
      <div class="s ${sign(d)}">${d>=0?"▲":"▼"} ${usd(Math.abs(d)).replace("−","")} (${pct(dp)}) since start</div></div>`
     + tile("Total PnL", usd(m.total_pnl_usd ?? 0), sign(m.total_pnl_usd))
     + tile("Win rate", m.win_rate!=null?pct(m.win_rate):"—","", m.n_trades?`${m.n_trades} trades`:"no trades yet")
@@ -315,23 +354,48 @@ function renderNavStats(m){
   $("#navEquity").innerHTML = `${usd(m.equity)} <span class="${sign(d)}" style="font-weight:400">${d>=0?"▲":"▼"}${pct(Math.abs(d/m.starting_equity),1)}</span>`;
   $("#navBadge").textContent = live?"LIVE":"DRY-RUN";
   $("#navBadge").className = "badge " + (live?"live":"dry");
+  $("#navPulse").classList.toggle("live", !!live);
 }
 
-// Scrollspy: highlight the nav link for whichever section is in view, and
-// auto-close the mobile dropdown once a link is tapped.
+// Scrollspy: highlight the nav link for whichever section is in view, slide
+// a glowing indicator underneath it, and auto-close the mobile dropdown.
 (function initNav(){
   const links = [...document.querySelectorAll("#navLinks a")];
   const targets = links.map(a => document.querySelector(a.getAttribute("href"))).filter(Boolean);
   if(!targets.length) return;
+  const wrap = $("#navLinks"), ind = $("#navIndicator");
+  function moveIndicator(a){
+    if(!a){ ind.classList.remove("show"); return; }
+    ind.style.left = (a.offsetLeft + 11) + "px";
+    ind.style.width = (a.offsetWidth - 22) + "px";
+    ind.classList.add("show");
+  }
   const io = new IntersectionObserver(entries=>{
     entries.forEach(e=>{
       if(!e.isIntersecting) return;
       const id = "#"+e.target.id;
       links.forEach(a=> a.classList.toggle("active", a.getAttribute("href")===id));
+      moveIndicator(links.find(a=>a.getAttribute("href")===id));
     });
   }, {rootMargin:"-40% 0px -55% 0px"});
   targets.forEach(t=>io.observe(t));
   links.forEach(a=> a.addEventListener("click", ()=> $("#navLinks").classList.remove("open")));
+  window.addEventListener("resize", ()=> moveIndicator(links.find(a=>a.classList.contains("active"))));
+})();
+
+// Scroll-reveal: cards fade/slide into place the first time they enter the
+// viewport, so the page feels considered instead of dumping everything at
+// once. Static rendering later (innerHTML swaps) doesn't touch this class,
+// so it never re-triggers.
+(function initReveal(){
+  const obs = new IntersectionObserver((entries, o)=>{
+    entries.forEach(e=>{
+      if(!e.isIntersecting) return;
+      e.target.classList.add("in-view");
+      o.unobserve(e.target);
+    });
+  }, {threshold:.08, rootMargin:"0px 0px -6% 0px"});
+  document.querySelectorAll(".card").forEach(c=> obs.observe(c));
 })();
 
 function renderSys(m){
