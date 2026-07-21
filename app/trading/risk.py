@@ -13,6 +13,7 @@ An adaptive system must never decide its own hard limits.
 from __future__ import annotations
 
 from dataclasses import dataclass
+from datetime import datetime, timezone
 
 import numpy as np
 
@@ -37,6 +38,10 @@ class RiskManager:
         self.dd_hard = float(cfg.get("risk.drawdown_hard_pct", 0.15))
         self.max_daily_loss_pct = float(cfg.get("risk.max_daily_loss_pct", 0.04))
         self.cp_alert = float(cfg.get("changepoint.alert_threshold", 0.35))
+        self.probe_risk_pct = float(cfg.get("risk.probe_risk_pct", 0.0008))
+        self.max_probes_per_day = int(cfg.get("risk.max_probes_per_day", 2))
+        self._probe_day: str | None = None
+        self._probes_today = 0
 
     # ---------- circuit breakers (fixed, non-adaptive) ----------
     def circuit_breakers(self, equity: float, peak_equity: float,
@@ -63,11 +68,15 @@ class RiskManager:
         return float(np.clip((confidence - min_conf) / max(0.85 - min_conf, 1e-6), 0.05, 1.0))
 
     def _drawdown_multiplier(self, equity: float, peak_equity: float) -> float:
+        # Decays toward a floor, not zero — the hard breaker (circuit_breakers)
+        # is the real stop; this just de-risks, it must never freeze exposure.
         dd = 0.0 if peak_equity <= 0 else max(0.0, 1.0 - equity / peak_equity)
         if dd <= self.dd_soft:
             return 1.0
         span = max(self.dd_hard - self.dd_soft, 1e-6)
-        return float(np.clip(1.0 - (dd - self.dd_soft) / span, 0.0, 1.0))
+        decay = np.clip(1.0 - (dd - self.dd_soft) / span, 0.0, 1.0)
+        floor = 0.15
+        return float(np.clip(floor + (1.0 - floor) * decay, floor, 1.0))
 
     def _changepoint_multiplier(self, cp_prob: float) -> float:
         if cp_prob <= 0.5 * self.cp_alert:
@@ -105,8 +114,31 @@ class RiskManager:
         size = risk_amount / stop_dist if stop_dist > 0 else float("nan")
         if not (np.isfinite(risk_amount) and np.isfinite(size)):
             return SizingDecision(False, "non-finite size/risk", multipliers=mult)
-        if risk_amount < equity * 0.0005:
+        if risk_amount < equity * 0.0002:
             return SizingDecision(False, f"risk too small after multipliers {mult}",
                                   multipliers=mult)
+        if risk_amount < equity * self.probe_risk_pct:
+            # Setup cleared min_confidence but multipliers squeezed size below a
+            # real edge-sized bet. Rather than starve the model of live fills
+            # during exactly the drawdown period it needs to learn from, allow
+            # a small, rate-limited probe trade at fixed minimal risk.
+            probe = self._take_probe_slot()
+            if not probe:
+                return SizingDecision(False, f"risk too small after multipliers {mult}",
+                                      multipliers=mult)
+            risk_amount = equity * self.probe_risk_pct
+            size = risk_amount / stop_dist
+            return SizingDecision(True, "ok (learning probe)", position_size=size,
+                                  risk_amount=risk_amount, multipliers=mult)
         return SizingDecision(True, "ok", position_size=size,
                               risk_amount=risk_amount, multipliers=mult)
+
+    def _take_probe_slot(self) -> bool:
+        today = datetime.now(timezone.utc).date().isoformat()
+        if today != self._probe_day:
+            self._probe_day = today
+            self._probes_today = 0
+        if self._probes_today >= self.max_probes_per_day:
+            return False
+        self._probes_today += 1
+        return True

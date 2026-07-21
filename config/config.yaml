@@ -99,6 +99,8 @@ risk:
   drawdown_soft_pct: 0.05    # exposure starts decaying past this drawdown
   drawdown_hard_pct: 0.15    # circuit breaker: no new trades beyond this
   max_daily_loss_pct: 0.04   # circuit breaker: halt new entries for the day
+  probe_risk_pct: 0.0008     # fixed tiny risk for learning probes when multipliers squeeze size out
+  max_probes_per_day: 2      # rate limit on learning probes so they can't compound into a real bet
 
 retrieval:
   k: 15                # similar historical trades retrieved per analysis
