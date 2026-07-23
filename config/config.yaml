@@ -111,14 +111,18 @@ risk:
 # but different entry signal logic -- and is permanently paper-only,
 # regardless of live.enabled.
 strategies:
+  adaptive_ml:
+    max_open_positions: 6      # overrides risk.max_open_positions for this strategy specifically
   momentum:
     enabled: true
     min_confidence: 0.55       # Beta-tracker win-rate must clear this to trade
     slope_threshold: 0.15      # min aligned slope_24/slope_96 magnitude to call a trend
+    max_open_positions: 6
   mean_reversion:
     enabled: true
     min_confidence: 0.55
     extreme_threshold: 0.82    # close_position beyond this (or below 1-this) triggers a fade
+    max_open_positions: 6
 
 retrieval:
   k: 15                # similar historical trades retrieved per analysis

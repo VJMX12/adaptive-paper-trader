@@ -134,55 +134,76 @@ def build_app(db: Database, starting_equity: float,
               strategies_meta: list[dict] | None = None) -> web.Application:
     app = web.Application(middlewares=[_security_mw])
     info = info or {}
-    strategies_meta = strategies_meta or []
+    strategies_meta = list(strategies_meta or [])
+    if not strategies_meta:
+        # Backward-compat single-strategy mode (also used by tests that call
+        # build_app directly without strategies_meta).
+        strategies_meta = [{"id": "default", "label": "Default", "db": db,
+                            "starting_equity": starting_equity,
+                            "learner_provider": learner_provider}]
+    by_id = {m["id"]: m for m in strategies_meta}
+    primary_id = strategies_meta[0]["id"]
+
+    def _resolve(req):
+        """Pick the strategy this request is scoped to via ?strategy=<id>,
+        falling back to the primary when absent or unrecognized."""
+        sid = req.query.get("strategy", primary_id)
+        return by_id.get(sid, by_id[primary_id])
 
     async def index(_req):
         return web.Response(text=INDEX_PATH.read_text(encoding="utf-8"),
                             content_type="text/html")
 
-    async def metrics(_req):
-        m = await compute_metrics(db, starting_equity,
+    async def metrics(req):
+        meta = _resolve(req)
+        m = await compute_metrics(meta["db"], meta["starting_equity"],
                                   universe=set(info.get("symbols") or []) or None)
         m["system"] = info
+        m["strategy"] = {"id": meta["id"], "label": meta["label"]}
         return web.json_response(m, dumps=_dumps)
 
-    async def positions(_req):
-        rows = await db.get_open_trades()
+    async def positions(req):
+        rows = await _resolve(req)["db"].get_open_trades()
         out = [{k: r.get(k) for k in _TRADE_COLS} for r in rows]
         return web.json_response(out, dumps=_dumps)
 
     async def trades(req):
         limit = _clamp_limit(req, 100, 1000)
-        rows = await db.get_closed_trades(limit=5000)
+        rows = await _resolve(req)["db"].get_closed_trades(limit=5000)
         rows = rows[-limit:][::-1]  # newest first
         out = [{k: r.get(k) for k in _TRADE_COLS} for r in rows]
         return web.json_response(out, dumps=_dumps)
 
     async def analyses(req):
         limit = _clamp_limit(req, 40, 500)
-        return web.json_response(await db.recent_analyses(limit), dumps=_dumps)
+        return web.json_response(
+            await _resolve(req)["db"].recent_analyses(limit), dumps=_dumps)
 
-    async def equity(_req):
-        return web.json_response(await db.equity_curve(), dumps=_dumps)
+    async def equity(req):
+        return web.json_response(
+            await _resolve(req)["db"].equity_curve(), dumps=_dumps)
 
     async def live(req):
         """Cheap per-second payload (no metrics scan): equity, open, positions,
         + a shadow-labeling heartbeat so the training signal is visibly moving.
         Polled every 1s by the client for lag-free liveness through any proxy.
-        ?ev_after=<id> returns only activity-feed events newer than that id."""
+        ?ev_after=<id> returns only activity-feed events newer than that id.
+        ?strategy=<id> scopes equity/open/positions to that strategy."""
+        meta = _resolve(req)
+        sdb = meta["db"]
         payload = {
-            "open": await db.open_positions_count(),
-            "equity": await db.latest_equity(starting_equity),
+            "open": await sdb.open_positions_count(),
+            "equity": await sdb.latest_equity(meta["starting_equity"]),
             "positions": [{k: r.get(k) for k in _TRADE_COLS}
-                          for r in await db.get_open_trades()],
+                          for r in await sdb.get_open_trades()],
         }
         try:
-            payload["shadow"] = await db.shadow_counts()
+            payload["shadow"] = await sdb.shadow_counts()
         except Exception:
             pass
         try:
             engine_count = cycle_count_provider() if cycle_count_provider else 0
-            payload["cycle_count"] = engine_count + validation_cache["refresh_count"]
+            payload["cycle_count"] = engine_count + validation_cache_total()
         except Exception:
             pass
         if feed is not None:
@@ -194,19 +215,23 @@ def build_app(db: Database, starting_equity: float,
             payload["events_top"] = feed.top
         return web.json_response(payload, dumps=_dumps)
 
-    async def learner(_req):
-        """Extractable learning state: model weights + calibration + shadow."""
-        snap = learner_provider() if learner_provider else {}
+    async def learner(req):
+        """Extractable learning state: model weights + calibration + shadow,
+        scoped to ?strategy=<id>."""
+        meta = _resolve(req)
+        provider = meta.get("learner_provider")
+        snap = provider() if provider else {}
         try:
-            snap["shadow"] = await db.shadow_counts()
+            snap["shadow"] = await meta["db"].shadow_counts()
         except Exception:
             pass
         return web.json_response(snap, dumps=_dumps)
 
-    async def learning_phases(_req):
+    async def learning_phases(req):
         """Per-symbol learning progress (phase 0-3, dot display) — see
-        app/dashboard/learning_phases.py for thresholds."""
-        rows = await db.all_symbol_learning()
+        app/dashboard/learning_phases.py for thresholds. Scoped to
+        ?strategy=<id>."""
+        rows = await _resolve(req)["db"].all_symbol_learning()
         for r in rows:
             r["dots"] = dots(r["phase"])
             r["emoji"], r["label"] = phase_info(r["phase"])
@@ -236,39 +261,53 @@ def build_app(db: Database, starting_equity: float,
             })
         return web.json_response({"strategies": out}, dumps=_dumps)
 
-    validation_cache: dict = {"result": None, "computed_at": 0.0, "refresh_count": 0}
+    # One cache entry per strategy -- each has its own trade history, so the
+    # walk-forward stat is meaningless if shared across strategies.
+    validation_cache: dict[str, dict] = {
+        m["id"]: {"result": None, "computed_at": 0.0, "refresh_count": 0}
+        for m in strategies_meta
+    }
 
-    async def _recompute_validation():
-        trades = await db.get_closed_trades(limit=100000)
-        analyses = await db.recent_analyses(5000)
+    def validation_cache_total() -> int:
+        return sum(c["refresh_count"] for c in validation_cache.values())
+
+    async def _recompute_validation(sid: str):
+        meta = by_id[sid]
+        trades = await meta["db"].get_closed_trades(limit=100000)
+        analyses = await meta["db"].recent_analyses(5000)
         result = run_walk_forward(trades, analyses, cfg)
         result["computed_at"] = time.time()
         result["refresh_interval_secs"] = VALIDATION_REFRESH_SECS
-        validation_cache["result"] = result
-        validation_cache["computed_at"] = result["computed_at"]
-        validation_cache["refresh_count"] += 1
+        cache = validation_cache[sid]
+        cache["result"] = result
+        cache["computed_at"] = result["computed_at"]
+        cache["refresh_count"] += 1
         return result
 
     async def _validation_refresh_loop():
         while True:
-            try:
-                await _recompute_validation()
-            except Exception as e:
-                log.warning("validation_refresh_failed", error=str(e))
+            for sid in validation_cache:
+                try:
+                    await _recompute_validation(sid)
+                except Exception as e:
+                    log.warning("validation_refresh_failed", strategy=sid, error=str(e))
             await asyncio.sleep(VALIDATION_REFRESH_SECS)
 
     async def validation(req):
-        """Walk-forward / prequential out-of-sample edge validation.
+        """Walk-forward / prequential out-of-sample edge validation, scoped
+        to ?strategy=<id>.
 
         Recomputed on a background timer (every VALIDATION_REFRESH_SECS)
         rather than per-request, since it's a heavy scan over closed trades
         and the underlying stat only moves as fast as new trades close.
         Pass ?refresh=1 to force an immediate recompute.
         """
-        if req.query.get("refresh") == "1" or validation_cache["result"] is None:
-            result = await _recompute_validation()
+        sid = _resolve(req)["id"]
+        cache = validation_cache[sid]
+        if req.query.get("refresh") == "1" or cache["result"] is None:
+            result = await _recompute_validation(sid)
         else:
-            result = validation_cache["result"]
+            result = cache["result"]
         return web.json_response(result, dumps=_dumps)
 
     app["_validation_refresh_task"] = None
@@ -299,11 +338,12 @@ def build_app(db: Database, starting_equity: float,
             "Connection": "keep-alive",
         })
         await resp.prepare(request)
+        meta = _resolve(request)
         seq = 0
         try:
             while True:
-                snap = await _snapshot(db, starting_equity, info,
-                                       learner_provider, heavy=(seq % 5 == 0))
+                snap = await _snapshot(meta["db"], meta["starting_equity"], info,
+                                       meta.get("learner_provider"), heavy=(seq % 5 == 0))
                 snap["seq"] = seq
                 await resp.write(b"data: " + _dumps(snap).encode() + b"\n\n")
                 seq += 1
@@ -314,9 +354,10 @@ def build_app(db: Database, starting_equity: float,
             log.info("sse_closed", error=str(e))
         return resp
 
-    async def trades_csv(_req):
-        """Full closed-trade history as CSV for offline analysis."""
-        rows = await db.get_closed_trades(limit=100000)
+    async def trades_csv(req):
+        """Full closed-trade history as CSV for offline analysis, scoped to
+        ?strategy=<id>."""
+        rows = await _resolve(req)["db"].get_closed_trades(limit=100000)
         buf = io.StringIO()
         if rows:
             cols = list(rows[0].keys())

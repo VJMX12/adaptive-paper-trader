@@ -30,11 +30,14 @@ class SizingDecision:
 
 
 class RiskManager:
-    def __init__(self, cfg):
+    def __init__(self, cfg, max_open_positions: int | None = None):
         self.starting_equity = float(cfg.get("risk.starting_equity"))
         self.base_risk_pct = float(cfg.get("risk.base_risk_pct", 0.01))
         self.kelly_fraction = float(cfg.get("risk.kelly_fraction", 0.25))
-        self.max_positions = int(cfg.get("risk.max_open_positions", 3))
+        # Allow a per-strategy override (multiple strategies share this class
+        # but each may want its own concurrent-position cap).
+        self.max_positions = (int(max_open_positions) if max_open_positions is not None
+                              else int(cfg.get("risk.max_open_positions", 3)))
         self.vol_target = float(cfg.get("risk.vol_target_annual", 0.35))
         self.dd_soft = float(cfg.get("risk.drawdown_soft_pct", 0.05))
         self.dd_hard = float(cfg.get("risk.drawdown_hard_pct", 0.15))

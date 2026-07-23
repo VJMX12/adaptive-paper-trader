@@ -206,6 +206,9 @@ body{padding-top:calc(var(--navh) + 18px)}
     <span class="nav-indicator" id="navIndicator"></span>
   </div>
   <div class="nav-stats">
+    <select id="stratSelect" onchange="switchStrategy(this.value)"
+      style="background:var(--panel);color:var(--ink);border:1px solid var(--line);
+      border-radius:6px;padding:4px 7px;font:inherit;font-size:11px;max-width:130px"></select>
     <span class="nav-sub" id="navEquity" style="font-weight:700">—</span>
     <span id="navBadge" class="badge dry" style="font-size:9px;padding:2px 8px">…</span>
     <button class="nav-toggle" id="navToggle" aria-label="toggle menu" onclick="document.getElementById('navLinks').classList.toggle('open')">☰</button>
@@ -896,7 +899,7 @@ function renderValidation(v){
      </div>`;
 }
 async function validationTick(force){
-  try{ renderValidation(await fetch("/validation"+(force?"?refresh=1":"")).then(r=>r.json())); }catch(e){}
+  try{ renderValidation(await fetch(withStrat("/validation"+(force?"?refresh=1":""))).then(r=>r.json())); }catch(e){}
 }
 
 function renderPhases(p){
@@ -913,7 +916,7 @@ function renderPhases(p){
   $("#phasesgrid").innerHTML = `<div class="chips" style="margin:0">${items}</div>`;
 }
 async function phasesTick(){
-  try{ renderPhases(await fetch("/learning_phases").then(r=>r.json())); }catch(e){}
+  try{ renderPhases(await fetch(withStrat("/learning_phases")).then(r=>r.json())); }catch(e){}
 }
 
 const STRAT_COLORS = ["#3987e5","#0ca30c","#fab219","#ec835a"];
@@ -981,13 +984,39 @@ async function strategiesTick(){
   }catch(e){}
 }
 
+// Strategy switcher: every strategy-scoped endpoint takes ?strategy=<id>,
+// resolved server-side to that strategy's own db (see app/dashboard/server.py
+// _resolve()). Bot chat / live events stay global (all strategies share one
+// feed, tagged by name in the message) so switching strategy never touches
+// EV_AFTER. SELECTED_STRATEGY starts empty -> server defaults to the primary
+// (adaptive_ml) until the first response tells us what's actually running.
+let SELECTED_STRATEGY = "";
+let _stratOptionsBuilt = false;
+function withStrat(url){
+  if(!SELECTED_STRATEGY) return url;
+  return url + (url.includes("?") ? "&" : "?") + "strategy=" + encodeURIComponent(SELECTED_STRATEGY);
+}
+function ensureStrategyOptions(m){
+  const list = (m.system||{}).strategies;
+  if(_stratOptionsBuilt || !list || !list.length) return;
+  _stratOptionsBuilt = true;
+  $("#stratSelect").innerHTML = list.map(s=>
+    `<option value="${esc(s.id)}">${esc(s.label)}</option>`).join("");
+  if(!SELECTED_STRATEGY) SELECTED_STRATEGY = (m.strategy||{}).id || list[0].id;
+  $("#stratSelect").value = SELECTED_STRATEGY;
+}
+function switchStrategy(id){
+  SELECTED_STRATEGY = id;
+  heavyTick(); lightTick(); validationTick(); phasesTick();
+}
+
 // Two-tier polling: a cheap /live payload every 1s (equity, open, positions)
 // for lag-free per-second liveness, and the heavy set every 8s. This streams
 // through any proxy (Railway buffers SSE), so updates never stall.
 let _beatFail=0;
 async function lightTick(){
   try{
-    const p = await fetch("/live?ev_after="+EV_AFTER).then(r=>r.json());
+    const p = await fetch(withStrat("/live?ev_after="+EV_AFTER)).then(r=>r.json());
     applyPayload(p);              // updates equity hero, open count, positions, clock
     _beatFail=0;
   }catch(e){ if(++_beatFail>3) $("#sync").textContent="offline?"; }
@@ -996,7 +1025,8 @@ async function heavyTick(){
   try{
     const [m,tr,an,eq,L] = await Promise.all(
       ["/metrics","/trades?limit=500","/analyses?limit=250","/equity","/learner"]
-      .map(u=>fetch(u).then(r=>r.json())));
+      .map(u=>fetch(withStrat(u)).then(r=>r.json())));
+    ensureStrategyOptions(m);
     applyPayload({metrics:m, trades:tr, analyses:an, equity_curve:eq, learner:L});
   }catch(e){ /* light tick keeps the clock honest */ }
 }

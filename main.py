@@ -131,7 +131,8 @@ class App:
         strategy = MLStrategyAdapter(self.cfg, model, calibration, LEARNER_STATE_PATH)
         db = Database(self.cfg.get("database.path"))
         executor = BybitExecutor(self.cfg)
-        risk = RiskManager(self.cfg)
+        max_pos = self.cfg.get(f"strategies.{strategy.id}.max_open_positions")
+        risk = RiskManager(self.cfg, max_open_positions=max_pos)
         paper = PaperTradingEngine(self.cfg, db, risk, min_confidence=strategy.min_conf)
         monitor = TradeMonitor(self.cfg, db, self.collector, paper)
         self.strategies[strategy.id] = StrategyRuntime(
@@ -142,7 +143,8 @@ class App:
     def _build_rule_strategy(self, cls, db_path: str, state_path: str) -> None:
         strategy = cls(self.cfg, state_path)
         db = Database(db_path)
-        risk = RiskManager(self.cfg)
+        max_pos = self.cfg.get(f"strategies.{strategy.id}.max_open_positions")
+        risk = RiskManager(self.cfg, max_open_positions=max_pos)
         paper = PaperTradingEngine(self.cfg, db, risk, min_confidence=strategy.min_conf)
         monitor = TradeMonitor(self.cfg, db, self.collector, paper)
         self.strategies[strategy.id] = StrategyRuntime(
@@ -526,7 +528,10 @@ class App:
             port = int(os.getenv("PORT", self.cfg.get("dashboard.port", 8787)))
             strategies_meta = [
                 {"id": rt.id, "label": rt.label, "db": rt.db,
-                 "starting_equity": rt.risk.starting_equity}
+                 "starting_equity": rt.risk.starting_equity,
+                 "min_confidence": rt.strategy.min_conf,
+                 "max_open_positions": rt.risk.max_positions,
+                 "learner_provider": (lambda rt=rt: rt.strategy.snapshot(FeatureVector.names()))}
                 for rt in self.strategies.values()
             ]
             runner = await start_dashboard(
@@ -545,6 +550,8 @@ class App:
                     "min_confidence": primary.strategy.min_conf,
                     "max_notional_usd": float(
                         self.cfg.get("live.max_notional_usd", 0)),
+                    "strategies": [{"id": rt.id, "label": rt.label}
+                                  for rt in self.strategies.values()],
                 },
                 strategies_meta=strategies_meta,
             )
