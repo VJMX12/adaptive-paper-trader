@@ -18,12 +18,17 @@ log = get_logger("paper")
 
 
 class PaperTradingEngine:
-    def __init__(self, cfg, db: Database, risk: RiskManager):
+    def __init__(self, cfg, db: Database, risk: RiskManager,
+                 min_confidence: float | None = None):
         self.cfg = cfg
         self.db = db
         self.risk = risk
         self.cooldown_minutes = float(cfg.get("strategy.cooldown_minutes", 45))
-        self.min_conf = float(cfg.get("strategy.min_confidence", 0.6))
+        # Allow a per-strategy override (multiple strategies share this class
+        # but each has its own min_confidence threshold) — falls back to the
+        # global config default when not given.
+        self.min_conf = (float(min_confidence) if min_confidence is not None
+                         else float(cfg.get("strategy.min_confidence", 0.6)))
         self.costs = {
             "taker_fee_pct": float(cfg.get("costs.taker_fee_pct", 0.0)),
             "slippage_pct": float(cfg.get("costs.slippage_pct", 0.0)),

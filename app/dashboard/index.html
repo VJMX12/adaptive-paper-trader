@@ -197,6 +197,7 @@ body{padding-top:calc(var(--navh) + 18px)}
     <a href="#nav-equity"><span class="ic">📈</span>Equity</a>
     <a href="#nav-milestones"><span class="ic">🏆</span>Milestones</a>
     <a href="#nav-phases"><span class="ic">🧠</span>Learning</a>
+    <a href="#nav-strategies"><span class="ic">⚖️</span>Compare</a>
     <a href="#nav-positions"><span class="ic">📍</span>Positions</a>
     <a href="#nav-trades"><span class="ic">📜</span>Trades</a>
     <a href="#nav-pnl"><span class="ic">💰</span>PnL</a>
@@ -249,6 +250,15 @@ body{padding-top:calc(var(--navh) + 18px)}
 <div class="card" style="margin-top:12px" id="nav-phases">
   <h2>Learning phases — per symbol</h2>
   <div id="phasesgrid" class="scroll"><div class="empty">no learning history yet</div></div>
+</div>
+
+<div class="card" style="margin-top:12px" id="nav-strategies">
+  <h2>Strategy comparison — same starting capital, different entry logic</h2>
+  <div id="stratTable" class="scroll"><div class="empty">loading strategies…</div></div>
+  <div id="stratWrap" style="position:relative;margin-top:10px">
+    <div id="stratTip" style="position:absolute;display:none;background:var(--panel2);border:1px solid var(--line);border-radius:6px;padding:6px 9px;font-size:11.5px;pointer-events:none;white-space:nowrap;z-index:5"></div>
+    <div id="stratChart" class="scroll"><div class="empty">loading equity curves…</div></div>
+  </div>
 </div>
 
 <div class="chips" id="chips"></div>
@@ -906,6 +916,71 @@ async function phasesTick(){
   try{ renderPhases(await fetch("/learning_phases").then(r=>r.json())); }catch(e){}
 }
 
+const STRAT_COLORS = ["#3987e5","#0ca30c","#fab219","#ec835a"];
+function renderStrategyTable(strategies){
+  if(!strategies.length){ $("#stratTable").innerHTML = `<div class="empty">no strategies reporting yet</div>`; return; }
+  const rows = strategies.map((s,i)=>{
+    const m = s.metrics||{};
+    const d = (m.equity??s.starting_equity) - s.starting_equity;
+    const phaseSum = (s.phase_counts||[0,0,0,0]).slice(1).reduce((a,b)=>a+b,0);
+    return `<tr>
+      <td><span style="display:inline-block;width:9px;height:9px;border-radius:50%;background:${STRAT_COLORS[i%4]};margin-right:7px"></span>${esc(s.label)}</td>
+      <td>${usd(m.equity??s.starting_equity)}</td>
+      <td class="${sign(d)}">${d>=0?"▲":"▼"} ${pct(Math.abs(d/s.starting_equity),1)}</td>
+      <td>${m.win_rate!=null?pct(m.win_rate):"—"}</td>
+      <td>${num(m.profit_factor)}</td>
+      <td>${m.max_drawdown_pct!=null?num(m.max_drawdown_pct)+"%":"—"}</td>
+      <td>${m.n_trades??0}</td>
+      <td>${phaseSum} symbol${phaseSum===1?"":"s"} learning</td>
+    </tr>`;
+  }).join("");
+  $("#stratTable").innerHTML = `<table><tr>
+    <th>Strategy</th><th>Equity</th><th>Return</th><th>Win rate</th>
+    <th>Profit factor</th><th>Max DD</th><th>Trades</th><th>Learning progress</th>
+  </tr>${rows}</table>`;
+}
+function renderStrategyChart(strategies){
+  const el = $("#stratChart");
+  const series = strategies
+    .map((s,i)=>({label:s.label, color:STRAT_COLORS[i%4],
+      curve:(s.equity_curve||[]).map(p=>({ts:+new Date(p.ts), pct:(p.equity - s.starting_equity)/s.starting_equity*100}))}))
+    .filter(s=>s.curve.length>=2);
+  if(!series.length){ el.innerHTML = `<div class="empty">not enough equity history yet to compare</div>`; return; }
+  const W=1180,H=220,P=34;
+  const allX = series.flatMap(s=>s.curve.map(p=>p.ts));
+  const allY = series.flatMap(s=>s.curve.map(p=>p.pct));
+  const x0=Math.min(...allX), x1=Math.max(...allX);
+  const y0=Math.min(0,...allY), y1=Math.max(0,...allY);
+  const yl=y0-(y1-y0||1)*.1, yh=y1+(y1-y0||1)*.1;
+  const X=t=>P+(t-x0)/((x1-x0)||1)*(W-2*P), Y=v=>H-P+(v-yl)/((yh-yl)||1)*(2*P-H);
+  const grid=[0,.25,.5,.75,1].map(f=>{const y=Y(yl+f*(yh-yl));
+    return `<line x1="${P}" x2="${W-P}" y1="${y}" y2="${y}" stroke="#242a33" stroke-width="1"/>`+
+           `<text x="${P-6}" y="${y+4}" fill="#667082" font-size="10" text-anchor="end">${(yl+f*(yh-yl)).toFixed(1)}%</text>`;}).join("");
+  const zeroY = Y(0);
+  const lines = series.map(s=>{
+    const pts = s.curve.map(p=>`${X(p.ts).toFixed(1)},${Y(p.pct).toFixed(1)}`).join(" ");
+    return `<polyline points="${pts}" fill="none" stroke="${s.color}" stroke-width="2"/>`;
+  }).join("");
+  const legend = series.map(s=>
+    `<span style="display:inline-flex;align-items:center;gap:5px;margin-right:14px">
+      <span style="width:9px;height:9px;border-radius:50%;background:${s.color};display:inline-block"></span>
+      ${esc(s.label)}</span>`).join("");
+  el.innerHTML = `<svg viewBox="0 0 ${W} ${H}" width="100%" height="${H}" style="min-width:640px">
+      ${grid}
+      <line x1="${P}" x2="${W-P}" y1="${zeroY}" y2="${zeroY}" stroke="#667082" stroke-width="1" stroke-dasharray="3,3"/>
+      ${lines}
+    </svg>
+    <div style="margin-top:6px;font-size:11.5px">${legend}</div>`;
+}
+async function strategiesTick(){
+  try{
+    const data = await fetch("/strategies/compare").then(r=>r.json());
+    const strategies = data.strategies||[];
+    renderStrategyTable(strategies);
+    renderStrategyChart(strategies);
+  }catch(e){}
+}
+
 // Two-tier polling: a cheap /live payload every 1s (equity, open, positions)
 // for lag-free per-second liveness, and the heavy set every 8s. This streams
 // through any proxy (Railway buffers SSE), so updates never stall.
@@ -925,11 +1000,12 @@ async function heavyTick(){
     applyPayload({metrics:m, trades:tr, analyses:an, equity_curve:eq, learner:L});
   }catch(e){ /* light tick keeps the clock honest */ }
 }
-async function boot(){ await heavyTick(); await lightTick(); validationTick(); phasesTick(); }
+async function boot(){ await heavyTick(); await lightTick(); validationTick(); phasesTick(); strategiesTick(); }
 boot();
 setInterval(lightTick, 1000);      // per-second live updates
 setInterval(heavyTick, 8000);      // metrics / learner / tables / chart
 setInterval(phasesTick, 8000);     // per-symbol learning phase dots
+setInterval(strategiesTick, 15000); // strategy comparison table + equity overlay
 setInterval(validationTick, 30000); // walk-forward validation (heavier scan)
 window.addEventListener("resize", renderChart);
 </script>

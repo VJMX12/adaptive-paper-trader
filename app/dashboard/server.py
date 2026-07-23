@@ -130,9 +130,11 @@ async def _security_mw(request, handler):
 
 def build_app(db: Database, starting_equity: float,
               info: dict | None = None, learner_provider=None,
-              cfg=None, feed=None, cycle_count_provider=None) -> web.Application:
+              cfg=None, feed=None, cycle_count_provider=None,
+              strategies_meta: list[dict] | None = None) -> web.Application:
     app = web.Application(middlewares=[_security_mw])
     info = info or {}
+    strategies_meta = strategies_meta or []
 
     async def index(_req):
         return web.Response(text=INDEX_PATH.read_text(encoding="utf-8"),
@@ -210,6 +212,29 @@ def build_app(db: Database, starting_equity: float,
             r["emoji"], r["label"] = phase_info(r["phase"])
         return web.json_response({"symbols": rows, "total_phases": TOTAL_PHASES},
                                  dumps=_dumps)
+
+    async def strategies_compare(_req):
+        """Side-by-side comparison across every running strategy: each has
+        its own independent paper ledger (separate db), so this is a fair
+        apples-to-apples read of the same starting capital under different
+        entry logic."""
+        out = []
+        universe = set(info.get("symbols") or []) or None
+        for meta in strategies_meta:
+            sdb, seq = meta["db"], meta["starting_equity"]
+            m = await compute_metrics(sdb, seq, universe=universe)
+            curve = await sdb.equity_curve()
+            phases = await sdb.all_symbol_learning()
+            phase_counts = [0, 0, 0, 0]
+            for p in phases:
+                phase_counts[p["phase"]] += 1
+            out.append({
+                "id": meta["id"], "label": meta["label"],
+                "starting_equity": seq, "metrics": m,
+                "equity_curve": [{"ts": c["ts"], "equity": c["equity"]} for c in curve],
+                "phase_counts": phase_counts,
+            })
+        return web.json_response({"strategies": out}, dumps=_dumps)
 
     validation_cache: dict = {"result": None, "computed_at": 0.0, "refresh_count": 0}
 
@@ -312,6 +337,7 @@ def build_app(db: Database, starting_equity: float,
     app.router.add_get("/live", live)
     app.router.add_get("/learner", learner)
     app.router.add_get("/learning_phases", learning_phases)
+    app.router.add_get("/strategies/compare", strategies_compare)
     app.router.add_get("/validation", validation)
     app.router.add_get("/stream", stream)
     app.router.add_get("/export/trades.csv", trades_csv)
@@ -322,13 +348,14 @@ async def start_dashboard(db: Database, starting_equity: float,
                           host: str, port: int,
                           info: dict | None = None,
                           learner_provider=None, cfg=None,
-                          feed=None, cycle_count_provider=None) -> web.AppRunner:
+                          feed=None, cycle_count_provider=None,
+                          strategies_meta: list[dict] | None = None) -> web.AppRunner:
     if not os.getenv("DASHBOARD_PASS"):
         log.warning("dashboard_open",
                     hint="no DASHBOARD_PASS set — dashboard is publicly "
                          "readable. Set DASHBOARD_PASS to require Basic Auth.")
     app = build_app(db, starting_equity, info, learner_provider, cfg, feed,
-                    cycle_count_provider)
+                    cycle_count_provider, strategies_meta)
     runner = web.AppRunner(app)
     await runner.setup()
     site = web.TCPSite(runner, host, port)

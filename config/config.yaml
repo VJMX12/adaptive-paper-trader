@@ -105,6 +105,21 @@ risk:
   hard_stop_probe_confidence_margin: 0.15     # only take a hard-stop probe if confidence clears min_confidence by this much
   max_hard_stop_probes_per_day: 1             # separate, stricter cap from the normal probe budget
 
+# Additional strategies run alongside adaptive_ml (the primary, ML-driven
+# strategy configured above under strategy:/risk:) for comparison. Each gets
+# its own independent paper ledger, same starting_equity and risk framework,
+# but different entry signal logic -- and is permanently paper-only,
+# regardless of live.enabled.
+strategies:
+  momentum:
+    enabled: true
+    min_confidence: 0.55       # Beta-tracker win-rate must clear this to trade
+    slope_threshold: 0.15      # min aligned slope_24/slope_96 magnitude to call a trend
+  mean_reversion:
+    enabled: true
+    min_confidence: 0.55
+    extreme_threshold: 0.82    # close_position beyond this (or below 1-this) triggers a fade
+
 retrieval:
   k: 15                # similar historical trades retrieved per analysis
   min_history: 5       # below this many closed trades, retrieval is informational only (was 8)
