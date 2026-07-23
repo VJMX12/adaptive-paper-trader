@@ -101,6 +101,9 @@ risk:
   max_daily_loss_pct: 0.04   # circuit breaker: halt new entries for the day
   probe_risk_pct: 0.0008     # fixed tiny risk for learning probes when multipliers squeeze size out
   max_probes_per_day: 2      # rate limit on learning probes so they can't compound into a real bet
+  hard_stop_probe_risk_pct: 0.0003            # research sleeve: even smaller fixed risk once the hard drawdown stop trips
+  hard_stop_probe_confidence_margin: 0.15     # only take a hard-stop probe if confidence clears min_confidence by this much
+  max_hard_stop_probes_per_day: 1             # separate, stricter cap from the normal probe budget
 
 retrieval:
   k: 15                # similar historical trades retrieved per analysis

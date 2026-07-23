@@ -42,18 +42,40 @@ class RiskManager:
         self.max_probes_per_day = int(cfg.get("risk.max_probes_per_day", 2))
         self._probe_day: str | None = None
         self._probes_today = 0
+        # Research sleeve: once the hard drawdown stop trips, trading is
+        # otherwise frozen entirely (by design — see module docstring), which
+        # also starves the model of real fills exactly when it most needs
+        # fresh evidence. This sleeve is walled off from normal sizing: a
+        # much smaller fixed risk, a much stricter confidence bar, and its
+        # own separate daily cap, so it cannot meaningfully deepen the
+        # drawdown while still letting the model learn from live outcomes.
+        self.hard_stop_probe_risk_pct = float(
+            cfg.get("risk.hard_stop_probe_risk_pct", 0.0003))
+        self.hard_stop_probe_confidence_margin = float(
+            cfg.get("risk.hard_stop_probe_confidence_margin", 0.15))
+        self.max_hard_stop_probes_per_day = int(
+            cfg.get("risk.max_hard_stop_probes_per_day", 1))
+        self._hard_probe_day: str | None = None
+        self._hard_probes_today = 0
 
     # ---------- circuit breakers (fixed, non-adaptive) ----------
     def circuit_breakers(self, equity: float, peak_equity: float,
                          pnl_today: float, open_positions: int) -> str | None:
+        """Absolute blocks — never bypassed, not even by the research sleeve."""
         if open_positions >= self.max_positions:
             return f"max open positions ({self.max_positions}) reached"
-        dd = 0.0 if peak_equity <= 0 else max(0.0, 1.0 - equity / peak_equity)
-        if dd >= self.dd_hard:
-            return f"hard drawdown breaker: {dd:.1%} >= {self.dd_hard:.0%}"
         if pnl_today < 0 and abs(pnl_today) >= self.max_daily_loss_pct * equity:
             return (f"daily loss breaker: {abs(pnl_today):.2f} >= "
                     f"{self.max_daily_loss_pct:.0%} of equity")
+        return None
+
+    def hard_drawdown_breaker(self, equity: float, peak_equity: float) -> str | None:
+        """The drawdown hard stop, checked separately from circuit_breakers()
+        so size_position can offer a research-sleeve probe instead of an
+        unconditional block."""
+        dd = 0.0 if peak_equity <= 0 else max(0.0, 1.0 - equity / peak_equity)
+        if dd >= self.dd_hard:
+            return f"hard drawdown breaker: {dd:.1%} >= {self.dd_hard:.0%}"
         return None
 
     # ---------- adaptive multipliers ----------
@@ -96,6 +118,19 @@ class RiskManager:
         stop_dist = abs(entry - stop)
         if stop_dist <= 0 or entry <= 0:
             return SizingDecision(False, "invalid entry/stop distance")
+
+        hard_dd = self.hard_drawdown_breaker(equity, peak_equity)
+        if hard_dd:
+            required = min_confidence + self.hard_stop_probe_confidence_margin
+            if confidence < required:
+                return SizingDecision(False, hard_dd)
+            if not self._take_hard_stop_probe_slot():
+                return SizingDecision(False, hard_dd)
+            risk_amount = equity * self.hard_stop_probe_risk_pct
+            size = risk_amount / stop_dist
+            return SizingDecision(True, "ok (research sleeve — hard stop)",
+                                  position_size=size, risk_amount=risk_amount,
+                                  multipliers={"hard_stop_probe": 1.0})
 
         mult = {
             "vol": self._vol_multiplier(sigma_per_candle, candles_per_year),
@@ -141,4 +176,14 @@ class RiskManager:
         if self._probes_today >= self.max_probes_per_day:
             return False
         self._probes_today += 1
+        return True
+
+    def _take_hard_stop_probe_slot(self) -> bool:
+        today = datetime.now(timezone.utc).date().isoformat()
+        if today != self._hard_probe_day:
+            self._hard_probe_day = today
+            self._hard_probes_today = 0
+        if self._hard_probes_today >= self.max_hard_stop_probes_per_day:
+            return False
+        self._hard_probes_today += 1
         return True
