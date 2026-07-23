@@ -53,6 +53,10 @@ def build_review(trade: dict, calibration_score: float) -> tuple[dict, str]:
     won = (trade.get("pnl_usd") or 0) > 0
     mae, mfe = float(trade.get("mae_pct") or 0), float(trade.get("mfe_pct") or 0)
     feats = json.loads(trade["features"]) if isinstance(trade["features"], str) else trade["features"]
+    # pack_entry_features stores the normalizer snapshot alongside the plain
+    # numeric feature fields -- strip it before ranking "notable" features,
+    # or abs() on that dict value blows up the whole review.
+    feats = {k: v for k, v in feats.items() if isinstance(v, (int, float))}
 
     # which learned factors pointed the right / wrong way
     conf = float(trade["confidence"])
