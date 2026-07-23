@@ -67,9 +67,12 @@ class App:
             lr=self.cfg.get("learner.lr"), l2=self.cfg.get("learner.l2"),
             decay=self.cfg.get("learner.decay"))
         self.engine = AnalysisEngine(self.cfg, self.model, self.calibration)
-        self.risk = RiskManager(self.cfg)
-        self.paper = PaperTradingEngine(self.cfg, self.db, self.risk)
         self.executor = BybitExecutor(self.cfg)
+        # Hard drawdown stop only matters for real capital: in paper mode the
+        # model should keep learning from real fills through a losing streak
+        # rather than freeze, since nothing is actually at risk.
+        self.risk = RiskManager(self.cfg, live_provider=lambda: self.executor.live)
+        self.paper = PaperTradingEngine(self.cfg, self.db, self.risk)
         self.monitor = TradeMonitor(self.cfg, self.db, self.collector, self.paper)
         self.tg = TelegramNotifier(self.cfg)
         self.feed = ActivityFeed()
