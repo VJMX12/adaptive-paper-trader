@@ -7,9 +7,10 @@ Size = fractional-Kelly base risk, multiplied down by four continuous factors:
   4. changepoint collapse        (uncertainty alarm -> exposure toward zero)
 
 Circuit breakers are DELIBERATELY dumb and fixed:
-  - hard drawdown stop (real capital only — see live_provider below),
-    max daily loss, max open positions.
-An adaptive system must never decide its own hard limits.
+  - hard drawdown stop, max daily loss, max open positions.
+An adaptive system must never decide its own hard limits. Applies the same
+way in paper and live mode — the whole point of paper trading is that its
+risk numbers mean something.
 """
 from __future__ import annotations
 
@@ -29,15 +30,7 @@ class SizingDecision:
 
 
 class RiskManager:
-    def __init__(self, cfg, live_provider=lambda: False):
-        # The hard drawdown stop only matters when real capital is on the
-        # line. In paper mode (live_provider() == False) it never applies —
-        # nothing is actually at risk, so the model should keep trading and
-        # learning through a losing streak via the ordinary decaying
-        # multiplier (_drawdown_multiplier, floored not zeroed) instead of
-        # freezing outright. Once live trading is armed, this reverts to a
-        # deliberately dumb, unconditional stop.
-        self.live_provider = live_provider
+    def __init__(self, cfg):
         self.starting_equity = float(cfg.get("risk.starting_equity"))
         self.base_risk_pct = float(cfg.get("risk.base_risk_pct", 0.01))
         self.kelly_fraction = float(cfg.get("risk.kelly_fraction", 0.25))
@@ -128,7 +121,7 @@ class RiskManager:
         if stop_dist <= 0 or entry <= 0:
             return SizingDecision(False, "invalid entry/stop distance")
 
-        hard_dd = self.hard_drawdown_breaker(equity, peak_equity) if self.live_provider() else None
+        hard_dd = self.hard_drawdown_breaker(equity, peak_equity)
         if hard_dd:
             required = min_confidence + self.hard_stop_probe_confidence_margin
             if confidence < required:

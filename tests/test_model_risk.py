@@ -54,25 +54,25 @@ def test_risk_multipliers_reduce_size_under_uncertainty():
     assert confident.risk_amount > nervous.risk_amount or not nervous.allowed
 
 
-def test_circuit_breaker_hard_drawdown_live_only():
-    # The hard drawdown stop only applies when real capital is on the line
-    # (live_provider() == True) -- paper mode should keep trading through a
-    # drawdown via the floored decay multiplier instead of freezing.
-    rm_live = RiskManager(make_cfg(), live_provider=lambda: True)
-    d_live = rm_live.size_position(
+def test_circuit_breaker_hard_drawdown():
+    # The hard drawdown stop is unconditional -- applies the same in paper
+    # and live mode, since paper risk numbers should mean something too.
+    rm = RiskManager(make_cfg())
+    d = rm.size_position(
         equity=8000, peak_equity=10000, pnl_today=0, open_positions=0,
         entry=100.0, stop=98.0, confidence=0.65, min_confidence=0.6,
         sigma_per_candle=0.002, candles_per_year=105120, cp_prob=0.0)
-    assert not d_live.allowed
-    assert "drawdown" in d_live.reason
+    assert not d.allowed
+    assert "drawdown" in d.reason
 
-    rm_paper = RiskManager(make_cfg())  # default live_provider -> False
-    d_paper = rm_paper.size_position(
+    # A very high-confidence setup still gets the narrow research-sleeve
+    # exception (a tiny fixed-risk probe), regardless of paper/live.
+    d_probe = rm.size_position(
         equity=8000, peak_equity=10000, pnl_today=0, open_positions=0,
         entry=100.0, stop=98.0, confidence=0.9, min_confidence=0.6,
         sigma_per_candle=0.002, candles_per_year=105120, cp_prob=0.0)
-    assert d_paper.allowed
-    assert d_paper.multipliers["drawdown"] > 0
+    assert d_probe.allowed
+    assert "research sleeve" in d_probe.reason
 
 
 def test_circuit_breaker_daily_loss_and_max_positions():

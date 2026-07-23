@@ -131,10 +131,7 @@ class App:
         strategy = MLStrategyAdapter(self.cfg, model, calibration, LEARNER_STATE_PATH)
         db = Database(self.cfg.get("database.path"))
         executor = BybitExecutor(self.cfg)
-        # Hard drawdown stop only matters for real capital: in paper mode the
-        # model should keep learning from real fills through a losing streak
-        # rather than freeze, since nothing is actually at risk.
-        risk = RiskManager(self.cfg, live_provider=lambda: executor.live)
+        risk = RiskManager(self.cfg)
         paper = PaperTradingEngine(self.cfg, db, risk, min_confidence=strategy.min_conf)
         monitor = TradeMonitor(self.cfg, db, self.collector, paper)
         self.strategies[strategy.id] = StrategyRuntime(
@@ -145,7 +142,7 @@ class App:
     def _build_rule_strategy(self, cls, db_path: str, state_path: str) -> None:
         strategy = cls(self.cfg, state_path)
         db = Database(db_path)
-        risk = RiskManager(self.cfg, live_provider=lambda: False)  # permanently paper-only
+        risk = RiskManager(self.cfg)
         paper = PaperTradingEngine(self.cfg, db, risk, min_confidence=strategy.min_conf)
         monitor = TradeMonitor(self.cfg, db, self.collector, paper)
         self.strategies[strategy.id] = StrategyRuntime(
