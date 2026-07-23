@@ -264,8 +264,13 @@ class App:
         # every cycle treats dozens of highly correlated observations of the
         # same market state as independent training evidence (pseudo-
         # replication) and inflates apparent confidence beyond real sample size.
-        regime_changed = rt.last_shadow_regime.get(sym) != res.regime_label
-        rt.last_shadow_regime[sym] = res.regime_label
+        # Rule-based strategies have no regime model (regime_label is a fixed
+        # string), so also key on shadow_direction -- otherwise the "same
+        # state" check never re-arms after the very first cycle per symbol
+        # and they'd stop recording shadow setups forever.
+        state_key = f"{res.regime_label}|{res.shadow_direction}"
+        regime_changed = rt.last_shadow_regime.get(sym) != state_key
+        rt.last_shadow_regime[sym] = state_key
         d, sl, tp = res.shadow_direction, res.shadow_stop, res.shadow_take_profit
         if (regime_changed and d in ("long", "short") and sl and tp
                 and np.isfinite(sl) and np.isfinite(tp) and sl != res.price):
