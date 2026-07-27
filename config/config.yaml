@@ -91,7 +91,7 @@ strategy:
   max_trade_hours: 48    # time-based exit safety net
 
 risk:
-  starting_equity: 10000.0
+  starting_equity: 1000.0    # match the real aggressive-flip target size, not an arbitrary round number
   base_risk_pct: 0.01        # risk per trade at full multipliers
   kelly_fraction: 0.35       # fraction of full Kelly ever used (was 0.25)
   max_open_positions: 6      # was 3 -- more concurrent paper trades = more signal/week
@@ -115,12 +115,16 @@ strategies:
     max_open_positions: 6      # overrides risk.max_open_positions for this strategy specifically
   momentum:
     enabled: true
-    min_confidence: 0.55       # Beta-tracker win-rate must clear this to trade
+    # Lowered from 0.55: the Beta-tracker's real learned win-rate sits around
+    # 0.31, which is honest and correctly below any sane trading threshold --
+    # but it's paper money, and per explicit instruction the point is to keep
+    # learning from real fills, not sit idle refusing to ever trade.
+    min_confidence: 0.30
     slope_threshold: 0.15      # min aligned slope_24/slope_96 magnitude to call a trend
     max_open_positions: 6
   mean_reversion:
     enabled: true
-    min_confidence: 0.55
+    min_confidence: 0.30       # same reasoning as momentum above
     extreme_threshold: 0.82    # close_position beyond this (or below 1-this) triggers a fade
     max_open_positions: 6
 
