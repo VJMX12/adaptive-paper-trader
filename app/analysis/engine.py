@@ -101,6 +101,7 @@ class AnalysisEngine:
         self.min_conf = float(cfg.get("strategy.min_confidence", 0.6))
         self.min_rr = float(cfg.get("strategy.min_rr", 1.5))
         self.sl_mult = float(cfg.get("strategy.sl_sigma_mult", 1.6))
+        self.min_stop_pct = float(cfg.get("strategy.min_stop_pct", 0.004))
         self.tp_rr = float(cfg.get("strategy.tp_rr", 2.0))
         self.cp_alert = float(cfg.get("changepoint.alert_threshold", 0.35))
         # Concept-drift adaptation: temporarily speed up learning for a symbol
@@ -200,7 +201,11 @@ class AnalysisEngine:
 
         price = snap.last_price
         sigma_px = fv.sigma * price                 # per-candle sigma in price units
-        stop_dist = self.sl_mult * sigma_px
+        # Fee+slippage cost per trade is fixed regardless of stop distance, so
+        # a pure sigma-based stop can go tight enough (low-vol symbols) that
+        # costs eat several multiples of the intended 1R risk. Floor the stop
+        # at min_stop_pct of price to bound that drag (see config.yaml).
+        stop_dist = max(self.sl_mult * sigma_px, self.min_stop_pct * price)
         tp_dist = self.tp_rr * stop_dist
 
         if direction == "long":

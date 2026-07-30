@@ -81,6 +81,15 @@ strategy:
   # feedback. This is paper money; the cost of a wider net is noisier P&L,
   # not real capital, so it's an acceptable trade for training signal.
   sl_sigma_mult: 1.6     # stop distance in units of current volatility sigma
+  min_stop_pct: 0.004    # floor: SL never tighter than 0.4% of price. Sigma-based
+  # stops on low-vol symbols were landing as tight as 0.04-0.17% of price; the
+  # ~0.17% round-trip fee+slippage cost (see costs: below) is FIXED per trade
+  # regardless of stop distance, so a tight stop turns a "should be -1R" loss
+  # into -2R to -5.6R once costs are applied (cost_in_R = round_trip_cost_pct /
+  # stop_pct). Audited live data (2026-07-30): sl exits averaging -2.0R instead
+  # of -1.0R, tp exits averaging +1.0R instead of the nominal +2R -- i.e. an
+  # invisible ~1R-per-trade cost tax baked into every strategy's numbers,
+  # independent of signal quality. This floor caps that drag at ~0.43R.
   tp_rr: 2.0             # take-profit distance = tp_rr * stop distance
   cooldown_minutes: 0    # no forced wait before re-entering the same symbol
                           # (was 15/45) -- the only remaining per-symbol gate
@@ -115,16 +124,19 @@ strategies:
     max_open_positions: 6      # overrides risk.max_open_positions for this strategy specifically
   momentum:
     enabled: true
-    # Lowered from 0.55: the Beta-tracker's real learned win-rate sits around
-    # 0.31, which is honest and correctly below any sane trading threshold --
-    # but it's paper money, and per explicit instruction the point is to keep
-    # learning from real fills, not sit idle refusing to ever trade.
-    min_confidence: 0.30
+    # Was 0.55, then dropped to 0.30 to keep learning from real fills instead
+    # of sitting idle. Raised to 0.38 (2026-07-30): with the min_stop_pct cost
+    # floor above, the fee/slippage tax on realized R is much smaller, so the
+    # measured ~0.32 real win rate is now close to (2:1 RR) breakeven rather
+    # than being crushed further by a ~1R cost drag on top of it. Still below
+    # the original 0.55 -- still exploratory, just no longer feeding trades
+    # the strategy's own tracker already knows are underwater twice over.
+    min_confidence: 0.38
     slope_threshold: 0.15      # min aligned slope_24/slope_96 magnitude to call a trend
     max_open_positions: 6
   mean_reversion:
     enabled: true
-    min_confidence: 0.30       # same reasoning as momentum above
+    min_confidence: 0.38       # same reasoning as momentum above
     extreme_threshold: 0.82    # close_position beyond this (or below 1-this) triggers a fade
     max_open_positions: 6
 
