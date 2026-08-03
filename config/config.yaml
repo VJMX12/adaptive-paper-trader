@@ -139,6 +139,21 @@ strategies:
     min_confidence: 0.38       # same reasoning as momentum above
     extreme_threshold: 0.82    # close_position beyond this (or below 1-this) triggers a fade
     max_open_positions: 6
+  breakout:
+    enabled: true
+    # New (2026-08-03): starts exploratory like momentum/mean_reversion did
+    # pre-audit -- low bar so its own BetaTracker gets real outcomes to learn
+    # from fast. Revisit once it has ~50+ resolved trades of its own.
+    min_confidence: 0.38
+    breakout_threshold: 0.85   # close_position beyond this (or below 1-this) = at the range edge
+    vol_expansion_min: 1.2     # sigma_ratio must exceed this -- vol must be EXPANDING, not just high
+    max_open_positions: 6
+  order_flow:
+    enabled: true
+    min_confidence: 0.38
+    flow_threshold: 0.15       # min |signed_flow| to call a directional flow
+    vol_z_min: 0.5             # participation (vol_zscore) must be elevated for flow to be trusted
+    max_open_positions: 6
 
 retrieval:
   k: 15                # similar historical trades retrieved per analysis

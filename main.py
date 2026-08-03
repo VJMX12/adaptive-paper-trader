@@ -43,7 +43,9 @@ from app.features.engine import FeatureVector
 from app.journal.review import write_review
 from app.logging_setup import get_logger, setup_logging
 from app.strategies.ml_adapter import MLStrategyAdapter
-from app.strategies.rule_based import MeanReversionStrategy, MomentumStrategy
+from app.strategies.rule_based import (
+    BreakoutStrategy, MeanReversionStrategy, MomentumStrategy, OrderFlowStrategy,
+)
 from app.telegram.notifier import TelegramNotifier
 from app.trading.executor import BybitExecutor
 from app.trading.monitor import TradeMonitor
@@ -120,6 +122,14 @@ class App:
             self._build_rule_strategy(
                 MeanReversionStrategy, "data/paper_trader_mean_reversion.db",
                 "data/strategy_state_mean_reversion.json")
+        if bool(self.cfg.get("strategies.breakout.enabled", True)):
+            self._build_rule_strategy(
+                BreakoutStrategy, "data/paper_trader_breakout.db",
+                "data/strategy_state_breakout.json")
+        if bool(self.cfg.get("strategies.order_flow.enabled", True)):
+            self._build_rule_strategy(
+                OrderFlowStrategy, "data/paper_trader_order_flow.db",
+                "data/strategy_state_order_flow.json")
 
     # ------------------------------------------------------------------
     def _build_adaptive_ml(self) -> None:

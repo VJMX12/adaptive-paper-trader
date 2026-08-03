@@ -78,6 +78,7 @@ class RuleBasedStrategy:
         self.min_rr = float(cfg.get("strategy.min_rr", 1.5))
         self.sl_mult = float(cfg.get("strategy.sl_sigma_mult", 1.6))
         self.tp_rr = float(cfg.get("strategy.tp_rr", 2.0))
+        self.min_stop_pct = float(cfg.get("strategy.min_stop_pct", 0.004))
         tf = cfg.get("exchange.timeframe", "5m")
         minutes = TIMEFRAME_MINUTES.get(tf, 5)
         self.candles_per_year = 365 * 24 * 60 / minutes
@@ -92,7 +93,10 @@ class RuleBasedStrategy:
         direction = self._signal(fv)
 
         sigma_px = fv.sigma * price
-        stop_dist = self.sl_mult * sigma_px
+        # Floor stop at min_stop_pct of price: fee+slippage cost is fixed per
+        # notional regardless of stop distance, so an unfloored sigma-based
+        # stop on low-vol symbols lets cost_in_R blow up (see engine.py).
+        stop_dist = max(self.sl_mult * sigma_px, self.min_stop_pct * price)
         tp_dist = self.tp_rr * stop_dist
         rr = tp_dist / stop_dist if stop_dist > 0 else 0.0
 
@@ -173,6 +177,65 @@ class MomentumStrategy(RuleBasedStrategy):
         if fv.slope_24 > self.slope_threshold and fv.slope_96 > self.slope_threshold:
             return "long"
         if fv.slope_24 < -self.slope_threshold and fv.slope_96 < -self.slope_threshold:
+            return "short"
+        return None
+
+
+class BreakoutStrategy(RuleBasedStrategy):
+    """Trade FRESH range breaks confirmed by volatility expansion: price at
+    the edge of its 96-candle range AND short-term vol running hot versus
+    long-term vol (sigma_ratio > 1 means something is actually happening,
+    not just noise sitting at an old extreme). This is the mirror image of
+    MeanReversionStrategy's trigger (same close_position read) but the
+    OPPOSITE direction and gated on vol expansion instead of vol level --
+    deliberately so the two disagree on what a range extreme means and can
+    be compared to see which regime the market is actually rewarding."""
+
+    id = "breakout"
+    label = "Breakout"
+
+    def __init__(self, cfg, state_path: str):
+        super().__init__(cfg, state_path)
+        self.breakout_threshold = float(
+            cfg.get(f"strategies.{self.id}.breakout_threshold", 0.85))
+        self.vol_expansion_min = float(
+            cfg.get(f"strategies.{self.id}.vol_expansion_min", 1.2))
+
+    def _signal(self, fv: FeatureVector) -> str | None:
+        if fv.sigma_ratio < self.vol_expansion_min:
+            return None
+        lo = 1.0 - self.breakout_threshold
+        if fv.close_position >= self.breakout_threshold:
+            return "long"    # pushing out the top of the range, vol confirms
+        if fv.close_position <= lo:
+            return "short"   # pushing out the bottom of the range, vol confirms
+        return None
+
+
+class OrderFlowStrategy(RuleBasedStrategy):
+    """Follow the tape: trade in the direction of signed volume flow (which
+    side is actually being bought/sold) when participation itself is
+    elevated (vol_zscore high). Unlike Momentum (price slope) or Breakout
+    (range position + vol expansion), this reacts to WHO is trading, not
+    WHERE price is -- a distinct information source that can lead price
+    structure instead of confirming it."""
+
+    id = "order_flow"
+    label = "Order Flow"
+
+    def __init__(self, cfg, state_path: str):
+        super().__init__(cfg, state_path)
+        self.flow_threshold = float(
+            cfg.get(f"strategies.{self.id}.flow_threshold", 0.15))
+        self.vol_z_min = float(
+            cfg.get(f"strategies.{self.id}.vol_z_min", 0.5))
+
+    def _signal(self, fv: FeatureVector) -> str | None:
+        if fv.vol_zscore < self.vol_z_min:
+            return None
+        if fv.signed_flow > self.flow_threshold:
+            return "long"
+        if fv.signed_flow < -self.flow_threshold:
             return "short"
         return None
 
