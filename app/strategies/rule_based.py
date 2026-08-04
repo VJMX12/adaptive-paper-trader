@@ -87,10 +87,16 @@ class RuleBasedStrategy:
     def _signal(self, fv: FeatureVector) -> str | None:
         raise NotImplementedError
 
+    def _signal_ctx(self, snap, fv: FeatureVector) -> str | None:
+        """Hook for strategies that need more than the feature vector (e.g.
+        cross-sectional ranking needs to know WHICH symbol this is). Default
+        just delegates to the pure-feature _signal."""
+        return self._signal(fv)
+
     def analyze(self, snap) -> AnalysisResult:
         fv = compute_features(snap)
         price = snap.last_price
-        direction = self._signal(fv)
+        direction = self._signal_ctx(snap, fv)
 
         sigma_px = fv.sigma * price
         # Floor stop at min_stop_pct of price: fee+slippage cost is fixed per
@@ -236,6 +242,59 @@ class OrderFlowStrategy(RuleBasedStrategy):
         if fv.signed_flow > self.flow_threshold:
             return "long"
         if fv.signed_flow < -self.flow_threshold:
+            return "short"
+        return None
+
+
+class XSectionMomentumStrategy(RuleBasedStrategy):
+    """Cross-sectional momentum: rank ALL symbols by vol-adjusted 24h return
+    and trade only the extremes -- long the top-Q names, short the bottom-Q.
+    The bet is RELATIVE: strong coins keep beating weak coins over the next
+    day, whatever the market as a whole does.
+
+    Backtested 2026-08-04 (research/backtest.py + iterate_xmom.py) on 120d
+    of Bybit 1h data with real fee+slippage+funding costs: the only survivor
+    of 7 candidate families. Chosen config (K=24h vol-adjusted, Q=4, daily
+    rebalance, rank buffer) came from a train/validation split -- +6.9% /
+    Sharpe 2.2 / 4.8% maxDD on the untouched 60d holdout. NOTE the live
+    port differs from the backtest mechanics: exits here are TP/SL/timeout
+    per the app's monitor, not a daily basket rebalance, so expect tracking
+    error versus the research numbers.
+
+    Implementation: analyze() is called for every symbol every ~5 minutes,
+    so this strategy keeps a rolling per-symbol score cache and ranks it.
+    Signals only fire once at least MIN_BREADTH symbols have fresh scores.
+    """
+
+    id = "xsect_momentum"
+    label = "XSect Momentum"
+
+    STALE_MS = 15 * 60_000     # scores older than this drop out of the rank
+
+    def __init__(self, cfg, state_path: str):
+        super().__init__(cfg, state_path)
+        self.top_q = int(cfg.get(f"strategies.{self.id}.top_q", 4))
+        self.min_breadth = int(cfg.get(f"strategies.{self.id}.min_breadth", 20))
+        self._scores: dict[str, tuple[float, float]] = {}  # sym -> (ts_ms, score)
+
+    def _signal(self, fv: FeatureVector) -> str | None:  # pragma: no cover
+        return None  # unused; ranking needs symbol context (_signal_ctx)
+
+    def _signal_ctx(self, snap, fv: FeatureVector) -> str | None:
+        import time
+        now_ms = time.time() * 1000.0
+        # vol-adjusted 24h momentum, same score the backtest ranked on
+        score = fv.ret_24 / fv.sigma if fv.sigma > 1e-12 else 0.0
+        self._scores[snap.symbol] = (now_ms, score)
+
+        fresh = {s: sc for s, (ts, sc) in self._scores.items()
+                 if now_ms - ts <= self.STALE_MS}
+        if len(fresh) < self.min_breadth:
+            return None
+        ranked = sorted(fresh, key=fresh.get)
+        if snap.symbol in ranked[-self.top_q:] and score > 0:
+            return "long"
+        if snap.symbol in ranked[:self.top_q] and score < 0:
             return "short"
         return None
 

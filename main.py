@@ -45,6 +45,7 @@ from app.logging_setup import get_logger, setup_logging
 from app.strategies.ml_adapter import MLStrategyAdapter
 from app.strategies.rule_based import (
     BreakoutStrategy, MeanReversionStrategy, MomentumStrategy, OrderFlowStrategy,
+    XSectionMomentumStrategy,
 )
 from app.telegram.notifier import TelegramNotifier
 from app.trading.executor import BybitExecutor
@@ -130,6 +131,10 @@ class App:
             self._build_rule_strategy(
                 OrderFlowStrategy, "data/paper_trader_order_flow.db",
                 "data/strategy_state_order_flow.json")
+        if bool(self.cfg.get("strategies.xsect_momentum.enabled", True)):
+            self._build_rule_strategy(
+                XSectionMomentumStrategy, "data/paper_trader_xsect_momentum.db",
+                "data/strategy_state_xsect_momentum.json")
 
     # ------------------------------------------------------------------
     def _build_adaptive_ml(self) -> None:

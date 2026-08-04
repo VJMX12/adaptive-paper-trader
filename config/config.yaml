@@ -154,6 +154,15 @@ strategies:
     flow_threshold: 0.15       # min |signed_flow| to call a directional flow
     vol_z_min: 0.5             # participation (vol_zscore) must be elevated for flow to be trusted
     max_open_positions: 6
+  xsect_momentum:
+    # Cross-sectional (relative) momentum -- the ONLY strategy family that
+    # survived the 2026-08-04 backtest R&D net of costs (research/backtest.py,
+    # research/iterate_xmom.py: +6.9%, Sharpe 2.2 on a 60d untouched holdout).
+    enabled: true
+    min_confidence: 0.38
+    top_q: 4                   # trade only the 4 strongest (long) / 4 weakest (short) names
+    min_breadth: 20            # need fresh scores for >=20 symbols before ranking means anything
+    max_open_positions: 8      # by design it wants up to top_q longs + top_q shorts at once
 
 retrieval:
   k: 15                # similar historical trades retrieved per analysis
