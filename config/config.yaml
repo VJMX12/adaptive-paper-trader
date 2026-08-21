@@ -81,16 +81,20 @@ strategy:
   # feedback. This is paper money; the cost of a wider net is noisier P&L,
   # not real capital, so it's an acceptable trade for training signal.
   sl_sigma_mult: 1.6     # stop distance in units of current volatility sigma
-  min_stop_pct: 0.004    # floor: SL never tighter than 0.4% of price. Sigma-based
-  # stops on low-vol symbols were landing as tight as 0.04-0.17% of price; the
+  min_stop_pct: 0.012    # floor: SL never tighter than 1.2% of price. History: the
   # ~0.17% round-trip fee+slippage cost (see costs: below) is FIXED per trade
-  # regardless of stop distance, so a tight stop turns a "should be -1R" loss
-  # into -2R to -5.6R once costs are applied (cost_in_R = round_trip_cost_pct /
-  # stop_pct). Audited live data (2026-07-30): sl exits averaging -2.0R instead
-  # of -1.0R, tp exits averaging +1.0R instead of the nominal +2R -- i.e. an
-  # invisible ~1R-per-trade cost tax baked into every strategy's numbers,
-  # independent of signal quality. This floor caps that drag at ~0.43R.
-  tp_rr: 2.0             # take-profit distance = tp_rr * stop distance
+  # regardless of stop distance (cost_in_R = round_trip_cost_pct / stop_pct).
+  # The 2026-07-30 floor of 0.4% capped the drag at ~0.43R -- but the
+  # 2026-08-21 MAE/MFE study of 653 closed trades showed 0.43R still consumed
+  # the entire gross edge (best gross +0.086R/trade vs -0.34R net), and that
+  # 0.4% barriers sit inside ordinary noise (47.7% of SL losers were +0.5R up
+  # before dying). At 1.2% the drag is ~0.14R. Dollar risk stays constant:
+  # sizing is risk_amount / stop_distance, so a 3x wider stop just means a
+  # 3x smaller position.
+  tp_rr: 1.25            # take-profit distance = tp_rr * stop distance.
+  # Was 2.0. Exact counterfactual from the 2026-08-21 study (MFE-touch on the
+  # same 653 trades): win rate at 1.25R TP would have been 48.3% vs the 35%
+  # realized at 2R -- expectancy peaks at TP 1.0-1.25R for every book.
   cooldown_minutes: 0    # no forced wait before re-entering the same symbol
                           # (was 15/45) -- the only remaining per-symbol gate
                           # is app/trading/paper_engine.py's has_open_trade
@@ -158,7 +162,11 @@ strategies:
     # Cross-sectional (relative) momentum -- the ONLY strategy family that
     # survived the 2026-08-04 backtest R&D net of costs (research/backtest.py,
     # research/iterate_xmom.py: +6.9%, Sharpe 2.2 on a 60d untouched holdout).
-    enabled: true
+    # Disabled 2026-08-21: worst live book at every TP level in the MAE/MFE
+    # study (23.5% WR, -0.605R best-case net over 17 trades) -- the backtest
+    # edge did not survive contact with live data. Keep off until the research
+    # harness is audited for look-ahead / cost assumptions.
+    enabled: false
     min_confidence: 0.38
     top_q: 4                   # trade only the 4 strongest (long) / 4 weakest (short) names
     min_breadth: 20            # need fresh scores for >=20 symbols before ranking means anything
