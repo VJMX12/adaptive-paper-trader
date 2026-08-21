@@ -95,12 +95,13 @@ strategy:
   # Was 2.0. Exact counterfactual from the 2026-08-21 study (MFE-touch on the
   # same 653 trades): win rate at 1.25R TP would have been 48.3% vs the 35%
   # realized at 2R -- expectancy peaks at TP 1.0-1.25R for every book.
-  cooldown_minutes: 0    # no forced wait before re-entering the same symbol
-                          # (was 15/45) -- the only remaining per-symbol gate
-                          # is app/trading/paper_engine.py's has_open_trade
-                          # check, which just blocks two SIMULTANEOUS open
-                          # positions on one symbol (can't hold long+short at
-                          # once); re-entry right after a close is now instant.
+  cooldown_minutes: 30   # forced wait before re-entering a symbol after any
+                          # close. Was 0 (dropped from 15/45 for learning
+                          # speed), but 2026-08-21 live data showed instant
+                          # revenge re-entry: ATOM stopped out and re-opened
+                          # seconds later into the same noise. With 1.2% stops
+                          # trades resolve slower anyway, so 30 min costs
+                          # little signal and blocks the immediate-loss loop.
   max_trade_hours: 48    # time-based exit safety net
 
 risk:
